@@ -22,8 +22,8 @@ os.makedirs(opath, exist_ok=True)
 frame_width = int(vid.get(3))
 frame_height = int(vid.get(4))
 
-HISTORY = 100 
-BURN_IN = 100
+HISTORY = 250 
+BURN_IN = 25
 NFRAMES = 10000
 
 # Don't burn in more than MOG stores!
@@ -78,7 +78,8 @@ def color(img, color = cv2.COLORMAP_PARULA):
 
 
 
-bkd_mog = cv2.createBackgroundSubtractorMOG2(history = HISTORY, varThreshold = 16, detectShadows = True)
+bkd_mog = cv2.createBackgroundSubtractorMOG2(history = HISTORY, varThreshold = 4, detectShadows = True)
+bkd_knn = cv2.createBackgroundSubtractorKNN(history = 2000)
 
 for b in tqdm(range(BURN_IN), desc = "Burn-in"):
 
@@ -103,19 +104,39 @@ for nframe in tqdm(range(NFRAMES), desc = "Video"):
         break
 
     frame = resize(frame)
-    mog_mask = bkd_mog.apply(frame)
+    mog = bkd_mog.apply(frame)
 
     if last is None:
         last = frame
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         continue
 
-    mog_mask[mog_mask < 129] = 0
+    mog[mog < 129] = 0
+    mog = cv2.GaussianBlur(mog, (KERNEL, KERNEL), 0)
+    mog[mog < 50] = 0
+    mog_color = color(mog)
 
-    mog_mask = cv2.GaussianBlur(mog_mask, (KERNEL, KERNEL), 0)
-    mog_mask[mog_mask < 50] = 0
+    # find contours in the binary image
+    mog_mask = ((mog > 128) * 255).astype("uint8")
 
-    mog_vid.write(color(mog_mask))
+    _, contours, _ = cv2.findContours(mog_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for c in contours:
+
+       if cv2.contourArea(c) < 250: continue
+
+       # calculate moments for each contour
+       M = cv2.moments(c)
+
+       if not M["m00"]: continue
+     
+       # calculate x,y coordinate of center
+       cX = int(M["m10"] / M["m00"])
+       cY = int(M["m01"] / M["m00"])
+       cv2.circle(mog_color, (cX, cY), 5, (0, 0, 255), -1)
+
+
+
+    mog_vid.write(mog_color)
     continue
 
     last, last_gray = frame, gray
