@@ -37,7 +37,7 @@ class Object():
 
 class Tracker():
 
-    def __init__(self, max_missing = 40, max_distance = 250, contrail = 1000):
+    def __init__(self, max_missing = 40, max_distance = 250, contrail = 1000, color = (255, 255, 255)):
 
         self.oid = 0
         self.objects = {}
@@ -47,6 +47,8 @@ class Tracker():
         self.CONTRAIL = contrail
         self.MAX_MISSING = max_missing
         self.MAX_DISTANCE = max_distance
+
+        self.color = color
 
     def new_object(self, x, y, t, c):
 
@@ -63,7 +65,7 @@ class Tracker():
         # If there are no new points, abort.
         if new_points is None: return
 
-        if colors is None: [self.colors for x in new_points]
+        if colors is None: [self.color for x in new_points]
 
         # If there are no existing points, add them and abort!
         if not len(self.objects):
@@ -132,7 +134,7 @@ class Tracker():
 
                 if t0 is not None:
                     img = cv2.line(img, tuple([x0, y0]),
-                                        tuple([x1, y1]), o.color, 5)
+                                        tuple([x1, y1]), o.color, 2)
 
                 x0, y0, t0 = x1, y1, t1 
 
