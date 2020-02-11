@@ -6,7 +6,9 @@ import cv2
 
 class Object():
 
-    def __init__(self):
+    def __init__(self, id):
+
+        self.id = id
 
         self.xyt = []
         self.missing = 0
@@ -37,7 +39,7 @@ class Object():
 
 class Tracker():
 
-    def __init__(self, max_missing = 40, max_distance = 250, contrail = 1000, color = (255, 255, 255)):
+    def __init__(self, max_missing = 4, max_distance = 50, contrail = 1000, color = (255, 255, 255)):
 
         self.oid = 0
         self.objects = {}
@@ -52,7 +54,7 @@ class Tracker():
 
     def new_object(self, x, y, t, c):
 
-        self.objects[self.oid] = Object()
+        self.objects[self.oid] = Object(self.oid)
         self.objects[self.oid].update(x, y, t)
         self.objects[self.oid].set_color(c)
 
