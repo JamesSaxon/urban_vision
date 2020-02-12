@@ -6,6 +6,10 @@ from PIL import ImageDraw
 from edgetpu.detection.engine import DetectionEngine
 from edgetpu.utils import dataset_utils
 
+import tracker
+
+tracker = tracker.Tracker()
+
 video = "/Users/amandawhaley/Projects/UrbanVision/lsd_cars.mov"
 
 opath = re.sub(r".*\/(.*).mov", r"\1/", video)
@@ -15,7 +19,8 @@ _label = '/Users/amandawhaley/Projects/UrbanVision/coral/tflite/python/examples/
 engine = DetectionEngine(model)
 labels = dataset_utils.read_label_file(_label)
 nframe = 0
-detected = []
+detected = {}
+test_sample = {}
 
 vid = cv2.VideoCapture(video)
 os.makedirs(opath, exist_ok=True)
@@ -96,25 +101,23 @@ for nframe in tqdm(range(NFRAMES), desc = "Video"):
 
     _, contours, _ = cv2.findContours(mog_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     areas_inferenced = set()
+    positions = []
+    XY = None
     for c in contours:
         if cv2.contourArea(c) < 75: continue
 
         #Calculate bounding boxes for each countour
         x, y, w, h = cv2.boundingRect(c)
+        width = max(300,w*2*SCALE)
+        height = max(300,h*2*SCALE)
         x_mid = (x + w//2)*SCALE
         y_mid = (y + h//2)*SCALE
-        grid_square = (x_mid//300, y_mid//300)
-        if grid_square in areas_inferenced: continue
 
-        #Limit ROI for comparison with static ROI method
-        if grid_square[0] < 4 or grid_square[0] > 8 or grid_square[1] <1 or grid_square[1] > 3: continue
-
-        areas_inferenced.add(grid_square)
-
-        xmin = 300*grid_square[0]
-        xmax = xmin + 300
-        ymin = 300*grid_square[1]
-        ymax = ymin + 300
+        xmin = max(0,x_mid - width//2)
+        xmax = x_mid + width//2
+        ymin = max(0,y_mid - height//2)
+        ymax = y_mid + height//2
+        #print(xmin, xmax, ymin, ymax)
 
         #Run inference
         roi = frame[ymin:ymax, xmin:xmax]
@@ -122,7 +125,7 @@ for nframe in tqdm(range(NFRAMES), desc = "Video"):
         ans = engine.detect_with_image(image, threshold = thresh, keep_aspect_ratio=False, relative_coord=False, top_k = 10)
 
         #Draw rectangle around roi
-        cv2.rectangle(img, (xmin,ymin), (xmax,ymax), (255,255,0), 3)
+        #cv2.rectangle(img, (xmin,ymin), (xmax,ymax), (255,255,0), 3)
 
         # Save result.
         print('=========================================')
@@ -142,11 +145,21 @@ for nframe in tqdm(range(NFRAMES), desc = "Video"):
                 cv2.rectangle(img, tuple(draw_box[:2]), tuple(draw_box[2:]), (0,255,255), 2)
                 print('conf. = ', obj.score)
                 print('-----------------------------------------')
-            detected.append([nframe, label, obj.score, box[0], box[1], box[2], box[3]])
+                detected[nframe] = [label, obj.score, box[0], box[1], box[2], box[3]]
+                positions.append((int((box[0] + box[2])//2), int((box[1] + box[3])//2)))
 
+            if nframe%30 == 0:
+                test_sample[nframe] = resize(img)
+    if len(positions): XY = positions
+    tracker.update(XY)
+    img = tracker.draw(img, depth=50)
     cv2.imshow("img", resize(img))
-    cv2.waitKey(1)
+    cv2.waitKey(10)
 
+#for nframe in test_sample:
+#    print(nframe, detected[nframe])
+#    cv2.imshow("view", test_sample[nframe])
+#    cv2.waitKey()
 cv2.destroyAllWindows()
-cv2.waitKey(1)
-print(len(detected), " objects detected")
+cv2.waitKey(10)
+tracker.write_out('tracker_output.csv')
