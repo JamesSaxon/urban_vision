@@ -11,6 +11,10 @@ from glob import glob
 import sys, tqdm
 import pandas as pd
 
+import tracker
+
+tracker = tracker.Tracker()
+
 colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 model = '/Users/amandawhaley/Projects/UrbanVision/coral/tflite/python/examples/detection/models/mobilenet_ssd_v2_coco_quant_postprocess_edgetpu.tflite'
@@ -24,7 +28,7 @@ thresh = 0.5
 keep_aspect_ratio = False
 k = 10
 verbose = True
-categs = []
+categs = ['car', 'truck', 'bus']
 view = True
 
 engine = DetectionEngine(model)
@@ -49,32 +53,40 @@ if _roi:
     YMIN, YMAX = ROI[1], ROI[1] + ROI[3]
 
     #Set ROI manually to compare with contours method
-    XMIN, XMAX = 1200, 2699
-    YMIN, YMAX = 300, 1199
+    XMIN, XMAX = 1000, 2500
+    YMIN, YMAX = 800, 1900
 
     vid = cv2.VideoCapture(inp)
 
 if _roi:
     shade = 2 * np.ones((int(vid.get(4) / scale), int(vid.get(3) / scale))).astype("uint8")
+
     shade[int(YMIN/scale):int(YMAX/scale),int(XMIN/scale):int(XMAX/scale)] -= 1
 
+def resize(img, resize = scale):
+    return cv2.resize(img, None, fx = 1 / resize, fy = 1 / resize, interpolation = cv2.INTER_AREA)
+
 nframe = 0
-detected = []
+detected = {}
+test_sample = {}
 
 while True:
     ret, frame = vid.read()
     nframe += 1
+    positions = []
+    XY = None
+    img = frame
     print(nframe, end = " ", flush = True)
     if not ret: break
     if frames and nframe > frames: break
     roi = frame if not _roi else frame[YMIN:YMAX, XMIN:XMAX]
     scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale, interpolation = cv2.INTER_AREA)
     if _roi: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
-    img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(img)
+    image = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
 
     # Run inference.
-    ans = engine.detect_with_image(img, threshold = thresh, keep_aspect_ratio=keep_aspect_ratio, relative_coord=False, top_k = k)
+    ans = engine.detect_with_image(image, threshold = thresh, keep_aspect_ratio=keep_aspect_ratio, relative_coord=False, top_k = k)
 
     # Save result.
     if verbose: print('=========================================')
@@ -97,22 +109,25 @@ while True:
                 box[2] += XMIN
                 box[1] += YMIN
                 box[3] += YMIN
-            draw_box = (box / scale).astype(int)
-            cv2.rectangle(scaled, tuple(draw_box[:2]), tuple(draw_box[2:]), color, 2)
+            draw_box = (box).astype(int)
+            cv2.rectangle(img, tuple(draw_box[:2]), tuple(draw_box[2:]), color, 2)
             if verbose:
                 print('conf. = ', obj.score)
                 print('-----------------------------------------')
-            detected.append([nframe, label, obj.score, box[0], box[1], box[2], box[3]])
+            detected[nframe] = [label, obj.score, box[0], box[1], box[2], box[3]]
+            positions.append((int((box[0] + box[2])//2), int((box[1] + box[3])//2)))
+    if len(positions): XY = positions
+    tracker.update(XY)
+    img = tracker.draw(img, depth=50)
+    cv2.imshow("view", resize(img))
+    if (cv2.waitKey(1) & 0xff) == 27: break
 
-    else:
-        if verbose: print('No object detected!')
 
-    if view:
-        cv2.imshow("view", scaled)
-        if (cv2.waitKey(1) & 0xff) == 27: break
-
-    if out is not None: out.write(scaled)
-    if verbose: print('Recorded frame {}'.format(nframe))
+#for nframe in test_sample:
+#    print(nframe, detected[nframe])
+#    cv2.imshow("view", test_sample[nframe])
+#    cv2.waitKey()
 cv2.destroyAllWindows()
-
-print(len(detected), " objects detected")
+cv2.waitKey(10)
+s = 'tracker_output_roi_{}_{}_{}_{}.csv'.format(XMIN,XMAX,YMIN,YMAX)
+tracker.write_out(s)
