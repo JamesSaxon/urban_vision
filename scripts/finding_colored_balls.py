@@ -10,10 +10,11 @@ from time import sleep, time
 
 import re, sys
 
-ball_colors_bgr = {"red" : (20, 45, 180),
+ball_colors_bgr = {# "red" : (20, 45, 180),
+                   "red" : (60, 15, 150),
                    "orange" : (30, 80, 190),
                    "yellow" : (0, 190, 190), 
-                   "green" : (50, 135, 35),
+                   "green" : (50, 90, 25),
                    "blue" : (130, 30, 15),
                    "magenta" : (60, 45, 180)}
 
@@ -104,7 +105,8 @@ def get_ball_color(img, xy, size = 80, blur = 5, thresh = 20):
         mask = cv2.dilate(mask, None, iterations = 2)
         mask = cv2.erode(mask, None, iterations = 2)
 
-        contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # The [-2:] is to deal with differences in cv2 versions.
+        contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2:]
 
         balls = []
         for c in contours:
@@ -150,7 +152,7 @@ def get_ball_color(img, xy, size = 80, blur = 5, thresh = 20):
     return None
 
 
-def get_ball_positions(img, color = "red", blur = 3, thresh = 50):
+def get_ball_positions(img, color = "red", blur = 3, thresh = 50, max_area = 150, erode = 4):
 
     if type(color) is str:
         color = ball_colors_bgr[color]
@@ -167,15 +169,19 @@ def get_ball_positions(img, color = "red", blur = 3, thresh = 50):
     lab_diff = np.sqrt(np.sum(lab_diff ** 2, axis = 2))
     
     mask = np.array((lab_diff < thresh) * 255, dtype = np.uint8)
+    mask = cv2.erode(mask, None, iterations = erode)
+    mask = cv2.dilate(mask, None, iterations = erode + 2)
 
-    contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # The [-2:] is to deal with changes is in cv2 versions.
+    contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2:]
+    contours = sorted(contours, key = lambda x: cv2.contourArea(x), reverse = True)
 
     balls = []
     for c in contours:
 
         area = cv2.contourArea(c)
-        if area > 150: continue
-        if area < 4:   continue
+
+        if area > max_area: continue
 
         M = cv2.moments(c)
 
@@ -183,7 +189,7 @@ def get_ball_positions(img, color = "red", blur = 3, thresh = 50):
             balls.append([M["m10"] / M["m00"],
                           M["m01"] / M["m00"]])
 
-    return np.array(balls).astype(int)
+    return np.array(balls).astype(int) # , mask
 
 
 
