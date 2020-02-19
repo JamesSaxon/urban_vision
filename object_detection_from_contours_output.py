@@ -1,4 +1,5 @@
 import os, sys, re, glob, cv2, numpy as np
+import time
 
 from tqdm import tqdm
 from PIL import Image
@@ -15,6 +16,7 @@ video = "/Users/amandawhaley/Projects/UrbanVision/lsd_cars.mov"
 opath = re.sub(r".*\/(.*).mov", r"\1/", video)
 model = '/Users/amandawhaley/Projects/UrbanVision/coral/tflite/python/examples/detection/models/mobilenet_ssd_v2_coco_quant_postprocess_edgetpu.tflite'
 _label = '/Users/amandawhaley/Projects/UrbanVision/coral/tflite/python/examples/detection/models/coco_labels.txt'
+view = False
 
 engine = DetectionEngine(model)
 labels = dataset_utils.read_label_file(_label)
@@ -75,12 +77,13 @@ for b in tqdm(range(BURN_IN), desc = "Burn-in"):
     mog_mask = bkd_mog.apply(frame)
 
 nframe = 0
+t0= time.clock()
 gray, last, last_gray = None, None, None
 for nframe in tqdm(range(NFRAMES), desc = "Video"):
     # reading from frame
     ret, frame = vid.read()
     if not ret:
-        print("Ran out of frames....")
+        if view: print("Ran out of frames....")
         break
     scaled_frame = resize(frame)
     mog = bkd_mog.apply(scaled_frame)
@@ -128,7 +131,7 @@ for nframe in tqdm(range(NFRAMES), desc = "Video"):
         #cv2.rectangle(img, (xmin,ymin), (xmax,ymax), (255,255,0), 3)
 
         # Save result.
-        print('=========================================')
+        if view: print('=========================================')
         if ans:
             for obj in ans:
                 label = labels[obj.label_id]
@@ -141,25 +144,24 @@ for nframe in tqdm(range(NFRAMES), desc = "Video"):
                 box[1] += ymin
                 box[3] += ymin
                 draw_box = box.astype(int)
-                #cv2.rectangle(mog_color, tuple(draw_box[:2]), tuple(draw_box[2:]), (0,255,255), 2)
-                cv2.rectangle(img, tuple(draw_box[:2]), tuple(draw_box[2:]), (0,255,255), 2)
-                print('conf. = ', obj.score)
-                print('-----------------------------------------')
+
+                if view:
+                    cv2.rectangle(img, tuple(draw_box[:2]), tuple(draw_box[2:]), (0,255,255), 2)
+                    print('conf. = ', obj.score)
+                    print('-----------------------------------------')
                 detected[nframe] = [label, obj.score, box[0], box[1], box[2], box[3]]
                 positions.append((int((box[0] + box[2])//2), int((box[1] + box[3])//2)))
 
-            if nframe%30 == 0:
-                test_sample[nframe] = resize(img)
     if len(positions): XY = positions
     tracker.update(XY)
-    img = tracker.draw(img, depth=50)
-    cv2.imshow("img", resize(img))
-    cv2.waitKey(10)
+    if view:
+        img = tracker.draw(img, depth=50)
+        cv2.imshow("img", resize(img))
+        cv2.waitKey(10)
 
-#for nframe in test_sample:
-#    print(nframe, detected[nframe])
-#    cv2.imshow("view", test_sample[nframe])
-#    cv2.waitKey()
+elapsed_time=time.clock()-t0
+frame_rate=nframe/elapsed_time
+print("Frame rate: ", frame_rate)
 cv2.destroyAllWindows()
 cv2.waitKey(10)
-tracker.write_out('tracker_output.csv')
+tracker.write_out('tracker_output_contour.csv')
