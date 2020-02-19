@@ -26,7 +26,7 @@ parser.add_argument("--history", default = 1000, type = int)
 parser.add_argument("--contrail", default = 50, type = int)
 parser.add_argument("--colors", default = ["red"], nargs = "+")
 parser.add_argument("--thresh", default = 40, type = int)
-parser.add_argument("--max_size", default = 40000, type = int)
+parser.add_argument("--max_size", default = 0.02, type = float)
 
 args     = parser.parse_args()
 # OFILE    = args.file
@@ -37,14 +37,6 @@ CONTRAIL = args.contrail
 COLORS   = args.colors
 THRESH   = args.thresh
 MAX_SIZE = args.max_size
-
-
-
-t0 = datetime.datetime.now()
-def dt_str():
-
-  dt = datetime.datetime.now() - t0
-  return "{:07.3f}".format(dt.total_seconds())
 
 
 def process(q, n):
@@ -63,7 +55,6 @@ def process(q, n):
 
 
         img = cv2.resize(img, None, fx = 1 / SCALE, fy = 1 / SCALE, interpolation = cv2.INTER_AREA)
-        img = cv2.flip(img, 1)
 
         bkd_mask = bkd.apply(img)
         bkd_mask = cv2.erode(bkd_mask, None, iterations = 1)
@@ -75,7 +66,7 @@ def process(q, n):
         for color in COLORS:
 
             balls = get_ball_positions(fg, color = color, 
-                                       thresh = THRESH, max_area = MAX_SIZE / SCALE / SCALE)
+                                       thresh = THRESH, max_area = MAX_SIZE * img.shape[0] * img.shape[1])
 
             for ball in balls:
 
@@ -116,7 +107,6 @@ def producer(qprod, qproc):
 
         if qproc.qsize() < 20:
 
-            label = dt_str() + "_" + cam
             qproc.put((img, cam))
         
 
@@ -132,12 +122,11 @@ def producer(qprod, qproc):
 
 addr = {"E" : "rtsp://jsaxon:iSpy53rd@192.168.1.64/1",
         "W" : "rtsp://jsaxon:iSpy53rd@192.168.1.65/1",
-        "C" : 0}
+        "L" : 0, "M" : 1}
+
+cfile = {"E" : "Es", "W" : "Ws", "L" : "L", "M" : "M"}
 
 cap = {k : cv2.VideoCapture(addr[k]) for k in CAMS}
-
-cup = {"E" : (int(584*2.5), int(215*2.5)), 
-       "W" : (int(495*2.5), int(350*2.5))}
 
 ##  os.makedirs(OFILE, exist_ok=True)
 ##  out = {k : cv2.VideoWriter(OFILE + '/{}.mp4'.format(k), # mkv
@@ -175,7 +164,9 @@ if __name__ == '__main__':
     pos = {k : deque() for k in CAMS}
     col = {k : deque() for k in CAMS}
 
-    tracker = tracker.Tracker()
+    tracker = {k : tracker.Tracker() for k in CAMS}
+
+    obs3d = []
 
     while True:
 
@@ -191,10 +182,42 @@ if __name__ == '__main__':
 
             if IMG[k] is not None:
                 
-                tracker.update(XY[k], colors = COL[k])
+                tracker[k].update(XY[k], colors = COL[k])
 
-                img = tracker.draw(IMG[k], depth = CONTRAIL)
+                img = tracker[k].draw(IMG[k], depth = CONTRAIL)
+                img = cv2.flip(img, 1)
                 cv2.imshow(k, img)
+
+            if len(CAMS) > 1:
+                
+                c1, c2 = CAMS[:2]
+
+                if XY[c1] is not None and XY[c2] is not None:
+
+                    pts1 = SCALE * np.array(XY[c1][:1]).T
+                    pts2 = SCALE * np.array(XY[c2][:1]).T
+
+                    P1 = np.column_stack([np.eye(3), np.zeros(3)]) # webcam is origin
+                    P2 = np.load("P.npy")
+
+                    K1 = np.load('./calib/{}/K.npy'.format(cfile[c1]))
+                    K2 = np.load('./calib/{}/K.npy'.format(cfile[c2]))
+
+                    dist1 = np.load('./calib/{}/dist.npy'.format(cfile[c1]))
+                    dist2 = np.load('./calib/{}/dist.npy'.format(cfile[c2]))
+                    
+                    # pts1_norm = cv2.undistortPoints(pts1, cameraMatrix = K1, distCoeffs = dist1)
+                    # pts2_norm = cv2.undistortPoints(pts2, cameraMatrix = K2, distCoeffs = dist2)
+                    # points_4d_hom = cv2.triangulatePoints(P1, P2, pts1_norm, pts2_norm)
+
+                    points_4d_hom = cv2.triangulatePoints(P1, P2, pts1, pts2)
+                    
+                    points_3d = cv2.convertPointsFromHomogeneous(points_4d_hom.T).reshape(-1,3)
+        
+                    print(points_3d)
+
+                    obs3d.append(points_3d.ravel())
+
                 
         if not RECORD: break
 
@@ -203,6 +226,7 @@ if __name__ == '__main__':
         print(t)
         t.join()
 
+    np.save("3d_points", np.array(obs3d))
 
     print("complete ::")
     print("prod: {}".format(qprod.qsize()))
