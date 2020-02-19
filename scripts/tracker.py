@@ -132,6 +132,8 @@ class Tracker():
 
             for x1, y1, t1 in o.xyt:
 
+                x1, y1 = int(x1), int(y1)
+
                 if self.t - t1 > depth: continue
 
                 if t0 is not None:
