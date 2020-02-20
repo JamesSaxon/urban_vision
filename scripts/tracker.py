@@ -96,7 +96,7 @@ class Object():
 
 
 
-    def kalman_smooth(self, kalman_cov = 0):
+    def kalman_smooth(self, kalman_cov = 0, depth = 0):
 
         if len(self.xyt) < 2: return self.xyt
 
@@ -109,6 +109,7 @@ class Object():
 
         measurements = np.array(self.xyt)[:,:2]
         measurements = np.ma.array(measurements, mask = np.isnan(measurements))
+        if depth: measurements = measurements[-depth,:]
 
         means, covariances = kf.smooth(measurements)
 
@@ -153,6 +154,13 @@ class Tracker():
 
         self.oid += 1
 
+    def predict_current_locations(self):
+
+        object_unmatched = {k for k, v in self.objects.items() if v.active}
+
+        return np.array([self.objects[k].predict_location(self.t)
+                         for k in object_unmatched])
+
     def update(self, new_points, colors = None):
 
         self.t += 1
@@ -160,7 +168,8 @@ class Tracker():
         # If there are no new points, abort.
         if new_points is None or not len(new_points): return
 
-        if colors is None: colors = [self.color for x in new_points]
+        if colors is None or not len(colors): 
+            colors = [self.color for x in new_points]
 
         # If there are no existing points, add them and abort!
         if not len(self.objects):
@@ -177,8 +186,6 @@ class Tracker():
         object_indexes   = {ki : k for ki, k in enumerate(object_unmatched)}
         object_points    = np.array([self.objects[k].predict_location(self.t)
                                      for k in object_unmatched])
-
-        # for k in object_unmatched: self.objects[k].predict_location(self.t)
 
         D = cdist(object_points, new_points)
         D = np.ma.array(D, mask = D > self.MAX_DISTANCE)
@@ -211,7 +218,7 @@ class Tracker():
                 o.deactivate()
 
 
-    def draw(self, img, color = (0, 0, 255), depth = None, kalman_cov = 0):
+    def draw(self, img, scale = 1, color = (0, 0, 255), depth = None, kalman_cov = 0):
 
         if depth is None:
             depth = self.CONTRAIL
@@ -227,7 +234,7 @@ class Tracker():
                 # If not Kalman smoothing, these can be empty.
                 if x1 is np.nan: continue
 
-                x1, y1 = int(x1), int(y1)
+                x1, y1 = int(x1 / scale), int(y1 / scale)
 
                 if depth and self.t - t1 > depth: continue
 
