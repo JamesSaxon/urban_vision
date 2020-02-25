@@ -215,8 +215,6 @@ class Tracker():
             return
 
         if type(colors) is not list: colors = [colors for x in new_points]
-        if type(areas)  is not list: areas  = [areas  for x in new_points]
-        if type(confs)  is not list: confs  = [confs  for x in new_points]
 
 
         # If there are no existing, active points, add them and abort!
@@ -226,7 +224,10 @@ class Tracker():
                 oidx = self.new_object()
                 self.objects[oidx].set_color(colors[idx])
 
-                self.objects[oidx].update(pt[0], pt[1], self.t, areas[idx], confs[idx])
+                a = areas[idx] if areas else None
+                c = confs[idx] if confs else None
+
+                self.objects[oidx].update(pt[0], pt[1], self.t, a, c)
 
             return
 
