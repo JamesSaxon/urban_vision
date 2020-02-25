@@ -41,7 +41,8 @@ class Detector():
         self.verbose = verbose
 
 
-    def detect(self, img, return_image = False):
+    def detect(self, img, color = None, 
+               return_image = False, return_areas = False, return_confs = False):
 
 
         tensor = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -50,7 +51,7 @@ class Detector():
                                             threshold = self.thresh, top_k = self.k, 
                                             keep_aspect_ratio = False, relative_coord = False)
 
-        XY = []
+        XY, AREAS, CONFS = [], [], []
         for obj in ans:
   
             # If the labels file and category filter
@@ -69,16 +70,10 @@ class Detector():
             box = obj.bounding_box.flatten()
             xmin, ymin, xmax, ymax = box
             
-            color = Detector.colors[self.categs.index(label)] if len(self.categs) else (0, 0, 255)
+            if color is None: 
+                color = Detector.colors[self.categs.index(label)] if len(self.categs) else (0, 0, 255)
 
-            if self.roi is not None:
-
-                xmin += roi["xmin"]
-                xmax += roi["xmin"]
-                ymin += roi["ymin"]
-                ymax += roi["ymin"]
-
-            cv2.rectangle(img, (int(xmin), int(ymin)), (int(xmax), int(ymax)), color, 2)
+            if return_image: cv2.rectangle(img, (int(xmin), int(ymin)), (int(xmax), int(ymax)), color, 1)
 
             if self.verbose: 
                 print('conf. = ', obj.score)
@@ -93,9 +88,15 @@ class Detector():
             if self.vloc == "lower":  y = ymax
 
             XY.append((x, y))
+            AREAS.append((xmax - xmin) * (ymax - ymin))
+            CONFS.append(obj.score)
 
-        if return_image: return XY, img
+        retval = [np.array(XY)]
 
-        return XY
+        if return_areas : retval.append(np.array(AREAS))
+        if return_confs : retval.append(np.array(CONFS))
+        if return_image : retval.append(img)
+
+        return retval
 
 
