@@ -224,8 +224,8 @@ class Tracker():
                 oidx = self.new_object()
                 self.objects[oidx].set_color(colors[idx])
 
-                a = areas[idx] if areas else None
-                c = confs[idx] if confs else None
+                a = None if areas is None else areas[idx]
+                c = None if confs is None else confs[idx]
 
                 self.objects[oidx].update(pt[0], pt[1], self.t, a, c)
 
