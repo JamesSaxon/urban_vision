@@ -21,7 +21,7 @@ class Object():
     kalman_observation = [[1, 0, 0, 0], [0, 0, 1, 0]]
 
 
-    def __init__(self, id, color = None,kalman_cov = 1):
+    def __init__(self, id, color = None, kalman_cov = 1):
 
         self.id = id
 
@@ -83,7 +83,7 @@ class Object():
 
     def set_color(self, c = None):
 
-        if c is None: self.color = (255, 255, 255)
+        if c is not None: self.color = c
 
     @property
     def last_time(self):
@@ -165,6 +165,8 @@ class Tracker():
 
         self.objects[self.oid] = Object(self.oid)
         self.objects[self.oid].update(x, y, t)
+
+        print("color", c)
         self.objects[self.oid].set_color(c)
 
         self.oid += 1
