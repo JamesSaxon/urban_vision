@@ -26,6 +26,8 @@ class Object():
         self.id = id
 
         self.xyt = []
+        self.area = []
+        self.conf = []
         self.missing = 0
 
         if color is None:
@@ -53,16 +55,16 @@ class Object():
         self.kf_means = [self.xyt[0][0], 0, self.xyt[0][1], 0]
         self.kf_covs  = [0, 0, 0, 0]
 
-        
 
-
-    def update(self, x, y, t):
+    def update(self, x, y, t, area = None, conf = None):
 
         # Yay recursion :-)
         if self.xyt and t - 1 != self.last_time:
             self.update(np.nan, np.nan, t - 1)
 
         self.xyt.append((x, y, t))
+        self.area.append(area)
+        self.conf.append(conf)
 
         if len(self.xyt) == 1: 
 
@@ -104,7 +106,6 @@ class Object():
         for t_ in range(self.last_time, t):
 
             means, covs = self.kalman.filter_update(means, covs, None)
-
         
         
         return means[0], means[2]
@@ -130,12 +131,13 @@ class Object():
 
         return np.array([means[:,0], means[:,2], [t for x, y, t in self.xyt]]).T
 
-
     @property
     def df(self):
 
         df = pd.DataFrame(self.xyt, columns = ["x", "y", "t"])
-        df["o"] = self.id
+        df["area"] = self.area
+        df["conf"] = self.conf
+        df["o"]    = self.id
 
         return df
 
@@ -147,12 +149,15 @@ class Object():
 
 class Tracker():
 
-    def __init__(self, max_missing = 4, max_distance = 50, contrail = 0, color = (255, 255, 255)):
+    def __init__(self, max_missing = 4, max_distance = 50, 
+                 predict_match_locations = False, contrail = 0, color = (255, 255, 255)):
 
         self.oid = 0
         self.objects = {}
 
         self.t = 0
+
+        self.predict_match_locations = predict_match_locations
 
         self.CONTRAIL = contrail
         self.MAX_MISSING = max_missing
@@ -161,63 +166,84 @@ class Tracker():
         self.color = color
 
 
-    def new_object(self, x, y, t, c):
+    def new_object(self):
 
         self.objects[self.oid] = Object(self.oid)
-        self.objects[self.oid].update(x, y, t)
-
-        print("color", c)
-        self.objects[self.oid].set_color(c)
 
         self.oid += 1
+
+        return self.oid - 1
+
+    def get_last_locations(self, return_unmatched = False, min_obs = 0):
+
+        object_unmatched = {k for k, v in self.objects.items() 
+                            if v.active and v.nobs > min_obs}
+
+        locations = np.array([self.objects[k].last_location
+                              for k in object_unmatched])
+
+        if return_unmatched: return object_unmatched, locations
+
+        return locations
+
 
     def predict_current_locations(self, return_unmatched = False, min_obs = 0):
 
         object_unmatched = {k for k, v in self.objects.items() 
                             if v.active and v.nobs > min_obs}
 
-        if return_unmatched:
-            
-            return object_unmatched, \
-                   np.array([self.objects[k].predict_location(self.t)
-                             for k in object_unmatched])
+        locations = np.array([self.objects[k].predict_location(self.t)
+                              for k in object_unmatched])
 
-        return np.array([self.objects[k].predict_location(self.t)
-                         for k in object_unmatched])
+        if return_unmatched: return object_unmatched, locations
 
-    def update(self, new_points, colors = None):
+        return locations
+
+
+    def update(self, new_points, areas = None, confs = None, colors = None):
 
         self.t += 1
 
         # If there are no new points, abort.
-        if new_points is None or not len(new_points): return
+        if new_points is None or not len(new_points):
+
+            # Get rid of objects "hanging around..."
+            for o in self.objects.values():
+                if self.t - o.last_time > self.MAX_MISSING:
+                    o.deactivate()
+
+            return
 
         if type(colors) is not list: 
             colors = [colors for x in new_points]
 
-        # If there are no existing points, add them and abort!
-        if not len(self.objects):
+        # If there are no existing, active points, add them and abort!
+        if not self.n_active:
             for pt, col in zip(new_points, colors):
-                self.new_object(pt[0], pt[1], self.t, col)
+
+                oidx = self.new_object()
+                self.objects[oidx].update(pt[0], pt[1], self.t)
+                self.objects[oidx].set_color(col)
 
             return
 
         new_points = np.array(new_points)
         new_indexes = set(range(len(new_points)))
 
-        obj_unmatched, obj_points = self.predict_current_locations(return_unmatched = True)
+        if self.predict_match_locations:
+            obj_unmatched, obj_points = self.predict_current_locations(return_unmatched = True)
+
+        else:
+            obj_unmatched, obj_points = self.get_last_locations(return_unmatched = True)
+
         obj_indexes = {ki : k for ki, k in enumerate(obj_unmatched)}
 
-        ##  object_unmatched = {k for k, v in self.objects.items() if v.active}
-        ##  object_indexes   = {ki : k for ki, k in enumerate(object_unmatched)}
-        ##  object_points    = np.array([self.objects[k].predict_location(self.t)
-        ##                               for k in object_unmatched])
-
-        ## print(obj_unmatched)
-        ## print(obj_points)
-
         D = cdist(obj_points, new_points)
-        D = np.ma.array(D, mask = D > self.MAX_DISTANCE)
+
+        if areas is None:
+            D = np.ma.array(D, mask = D > self.MAX_DISTANCE)
+        else:
+            D = np.ma.array(D, mask = D > self.MAX_DISTANCE * np.sqrt(areas)[np.newaxis,:])
   
         while not D.mask.all():
 
@@ -231,9 +257,11 @@ class Tracker():
 
             # Save the location and current time.
             obj_idx = obj_indexes[idx[0]]
+            new_idx = idx[1]
 
-            new_xy = new_points[idx[1]]
-            self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t)
+            new_xy = new_points[new_idx]
+            self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
+                                         areas[new_idx], confs[new_idx])
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
@@ -244,9 +272,17 @@ class Tracker():
         D.mask = False
         for idx in new_indexes:
 
-            if D[:,idx].min() < self.MAX_DISTANCE: continue
+            if areas is None:
+                if D[:,idx].min() < self.MAX_DISTANCE: continue
+
+            else: 
+                if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
             
-            self.new_object(new_points[idx][0], new_points[idx][1], self.t, colors[idx])
+            oidx = self.new_object()
+            self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t,
+                                      areas[idx], confs[idx])
+
+            self.objects[oidx].set_color(colors[idx])
 
 
         for o in self.objects.values():
@@ -282,6 +318,17 @@ class Tracker():
 
                 x0, y0, t0 = x1, y1, t1 
 
+            if o.active: 
+
+                if self.predict_match_locations:
+                    x, y = o.predict_location(self.t)
+                else:
+                    x, y = o.last_location
+
+                xy = tuple([int(x / scale), int(y / scale)])
+                img = cv2.circle(img, xy, 5, (255, 255, 255), -1)
+                img = cv2.circle(img, xy, 5, o.color, 2)
+
         return img
 
     def write(self, output):
@@ -289,6 +336,12 @@ class Tracker():
         df_out = pd.concat([o.df for o in self.objects.values()])
 
         df_out.to_csv(output, index = False)
+
+    @property
+    def n_active(self):
+
+        return sum(o.active for o in self.objects.values())
+
 
 
 
