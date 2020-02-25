@@ -7,6 +7,9 @@ import cv2
 
 from pykalman import KalmanFilter
 
+bgr_colors = [(60, 15, 150), (30, 80, 190), (0, 190, 190), 
+              (50, 90, 25), (130, 30, 15), (60, 45, 180)]
+
 class Object():
 
 
@@ -18,15 +21,22 @@ class Object():
     kalman_observation = [[1, 0, 0, 0], [0, 0, 1, 0]]
 
 
-    def __init__(self, id, kalman_cov = 1):
+    def __init__(self, id, color = None,kalman_cov = 1):
 
         self.id = id
 
         self.xyt = []
         self.missing = 0
 
-        self.color = (0, 0, 255)
+        if color is None:
 
+            self.color = bgr_colors[self.id % len(bgr_colors)]
+
+        else: 
+        
+            self.color = color
+
+        self.nobs = 0
         self.active = True
 
         self.kalman_cov = kalman_cov
@@ -54,7 +64,11 @@ class Object():
 
         self.xyt.append((x, y, t))
 
-        if len(self.xyt) == 1: self.make_kalman()
+        if len(self.xyt) == 1: 
+
+            self.make_kalman()
+            self.nobs += 1
+
         else:
             
             if x is np.nan:
@@ -64,11 +78,12 @@ class Object():
             else: 
 
                 self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array([x, y]))
+                self.nobs += 1
 
 
-    def set_color(self, c):
+    def set_color(self, c = None):
 
-        self.color = c
+        if c is None: self.color = (255, 255, 255)
 
     @property
     def last_time(self):
@@ -154,9 +169,16 @@ class Tracker():
 
         self.oid += 1
 
-    def predict_current_locations(self):
+    def predict_current_locations(self, return_unmatched = False, min_obs = 0):
 
-        object_unmatched = {k for k, v in self.objects.items() if v.active}
+        object_unmatched = {k for k, v in self.objects.items() 
+                            if v.active and v.nobs > min_obs}
+
+        if return_unmatched:
+            
+            return object_unmatched, \
+                   np.array([self.objects[k].predict_location(self.t)
+                             for k in object_unmatched])
 
         return np.array([self.objects[k].predict_location(self.t)
                          for k in object_unmatched])
@@ -168,8 +190,8 @@ class Tracker():
         # If there are no new points, abort.
         if new_points is None or not len(new_points): return
 
-        if colors is None or not len(colors): 
-            colors = [self.color for x in new_points]
+        if type(colors) is not list: 
+            colors = [colors for x in new_points]
 
         # If there are no existing points, add them and abort!
         if not len(self.objects):
@@ -178,20 +200,26 @@ class Tracker():
 
             return
 
-
         new_points = np.array(new_points)
         new_indexes = set(range(len(new_points)))
 
-        object_unmatched = {k for k, v in self.objects.items() if v.active}
-        object_indexes   = {ki : k for ki, k in enumerate(object_unmatched)}
-        object_points    = np.array([self.objects[k].predict_location(self.t)
-                                     for k in object_unmatched])
+        obj_unmatched, obj_points = self.predict_current_locations(return_unmatched = True)
+        obj_indexes = {ki : k for ki, k in enumerate(obj_unmatched)}
 
-        D = cdist(object_points, new_points)
+        ##  object_unmatched = {k for k, v in self.objects.items() if v.active}
+        ##  object_indexes   = {ki : k for ki, k in enumerate(object_unmatched)}
+        ##  object_points    = np.array([self.objects[k].predict_location(self.t)
+        ##                               for k in object_unmatched])
+
+        ## print(obj_unmatched)
+        ## print(obj_points)
+
+        D = cdist(obj_points, new_points)
         D = np.ma.array(D, mask = D > self.MAX_DISTANCE)
   
         while not D.mask.all():
 
+            # This is the 2D-index
             idx = np.unravel_index(D.argmin(axis = None), D.shape)
         
             # This object and this observation
@@ -200,16 +228,22 @@ class Tracker():
             D.mask[:,idx[1]] = True
 
             # Save the location and current time.
-            object_idx = object_indexes[idx[0]]
+            obj_idx = obj_indexes[idx[0]]
 
             new_xy = new_points[idx[1]]
-            self.objects[object_idx].update(new_xy[0], new_xy[1], self.t)
-            self.objects[object_idx].set_color(colors[idx[1]])
+            self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t)
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
 
+        # The new_indexes are not yet new -- just potential/unmatched.
+        # If they have a distance within the distance cut-off to an existing object
+        # then we don't want to create a new object for them.
+        D.mask = False
         for idx in new_indexes:
+
+            if D[:,idx].min() < self.MAX_DISTANCE: continue
+            
             self.new_object(new_points[idx][0], new_points[idx][1], self.t, colors[idx])
 
 
@@ -218,7 +252,7 @@ class Tracker():
                 o.deactivate()
 
 
-    def draw(self, img, scale = 1, color = (0, 0, 255), depth = None, kalman_cov = 0):
+    def draw(self, img, scale = 1, depth = None, kalman_cov = 0):
 
         if depth is None:
             depth = self.CONTRAIL
