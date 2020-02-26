@@ -34,20 +34,35 @@ parser.add_argument("--max_size", default = 0.02, type = float)
 parser.add_argument("--history", default = 1000, type = int)
 
 parser.add_argument("--view", default = False, action = 'store_true')
+parser.add_argument("--save", default = False, action = 'store_true')
+
 parser.add_argument("--kalman", default = 0, type = int, help = "Scale of Kalman error covariance in pixels.")
 parser.add_argument("--contrail", default = 50, type = int)
 
 parser.add_argument("--triangulate", default = False, action = 'store_true')
+parser.add_argument("--rain", default = False, action = 'store_true')
+parser.add_argument("--rain_frame_delay", default = 0.05, type = float)
+parser.add_argument("--rain_depth", default = 20, type = float)
+parser.add_argument("--min_triangulation_update", default = 0.02, type = float)
+
 
 args     = parser.parse_args()
-# OFILE    = args.file
 CAMS     = args.cams
 SCALE    = args.scale
 HISTORY  = args.history
-COLORS   = args.colors
-CATEGS   = args.categs
+BALL_COLORS   = args.colors
+DET_CATS = args.categs
 THRESH   = args.thresh
 MAX_SIZE = args.max_size
+
+if BALL_COLORS and DET_CATS:
+    print("You should use only the ball color detection or TF detection.")
+    sys.exit()
+
+
+if args.triangulate and len(CAMS) < 2: 
+    print("Cannot triangulate without at least two cameras!")
+    sys.exit()
 
 
 def process(q, n):
@@ -55,9 +70,11 @@ def process(q, n):
     name = threading.currentThread().getName()
     print("created", threading.currentThread().getName())
 
-    detector = det.Detector(categs = CATEGS, thresh = THRESH, k = args.k, verbose = False)
+    if len(DET_CATS):
+        detector = det.Detector(categs = DET_CATS, thresh = THRESH, k = args.k, verbose = False)
 
-    bkd = cv2.createBackgroundSubtractorMOG2(history = HISTORY, varThreshold = 8, detectShadows = False)
+    if len(BALL_COLORS): 
+        bkd = cv2.createBackgroundSubtractorMOG2(history = HISTORY, varThreshold = 8, detectShadows = False)
 
     while not all(COMPLETE.values()):
 
@@ -66,47 +83,48 @@ def process(q, n):
 
         img = cv2.resize(img, None, fx = 1 / SCALE, fy = 1 / SCALE, interpolation = cv2.INTER_AREA)
 
-        bkd_mask = bkd.apply(img)
-        bkd_mask = cv2.erode(bkd_mask, None, iterations = 1)
+        if BALL_COLORS: 
 
-        fg = cv2.bitwise_or(img, img, mask = bkd_mask)
+            positions, colors = [], []
+
+            bkd_mask = bkd.apply(img)
+            bkd_mask = cv2.erode(bkd_mask, None, iterations = 1)
+
+            fg = cv2.bitwise_or(img, img, mask = bkd_mask)
   
-        colors = []
-        positions = []
-        for color in COLORS:
+            for color in BALL_COLORS:
 
-            balls = get_ball_positions(fg, color = color, 
-                                       thresh = THRESH, max_area = MAX_SIZE * img.shape[0] * img.shape[1])
+                balls = get_ball_positions(fg, color = color, 
+                                           thresh = THRESH, max_area = MAX_SIZE * img.shape[0] * img.shape[1])
 
-            for ball in balls:
+                for ball in balls:
 
-                colors.append(ball_colors_bgr[color])
-                positions.append(tuple(ball))
+                    colors.append(ball_colors_bgr[color])
+                    positions.append(tuple(ball))
 
-        if CATEGS:
+            tracker[cam].update(np.array(positions) * SCALE, colors = colors)
+
+        elif DET_CATS:
             
-            xy, img = detector.detect(img, return_image = True)
+            if args.view and not args.triangulate:
+                xy, areas, confs, img = detector.detect(img, color = (255, 255, 255), 
+                                                        return_areas = True, 
+                                                        return_image = True,
+                                                        return_confs = True)
 
-            for i_xy in xy:
+            else: xy, areas, confs = detector.detect(img, return_areas = True, return_confs = True)
 
-                colors.append((255, 255, 255))
-                positions.append(i_xy)
-            
+            tracker[cam].update(xy * SCALE, areas = areas * SCALE * SCALE, confs = confs)
 
-        if len(colors):
 
-            XY[cam] = np.array(positions) * SCALE
-            COL[cam] = colors
+        if args.view and not args.triangulate:
 
-        else:
+            img = tracker[cam].draw(img, scale = SCALE,
+                                    depth = args.contrail,
+                                    kalman_cov = args.kalman)
 
-            XY[cam] = None
-            COL[cam] = None
+            IMG[cam] = img
 
-        tracker[cam].update(np.array(positions) * SCALE, colors = colors)
-        img = tracker[cam].draw(img, scale = SCALE, depth = args.contrail, kalman_cov = args.kalman)
-
-        IMG[cam] = img
 
         q.task_done()
 
@@ -155,13 +173,11 @@ cap = {k : cv2.VideoCapture(addr[k]) for k in CAMS}
 ##                             (int(cap[k].get(3)) // SCALE, int(cap[k].get(4)) // SCALE))
 ##         for k in CAMS}
 
-IMG = {k : None for k in CAMS}
-XY  = {k : None for k in CAMS}
-COL = {k : None for k in CAMS}
 
 RECORD = True
 COMPLETE = {k : False for k in CAMS}
 
+IMG = {k : None for k in CAMS}
 
 if __name__ == '__main__':
 
@@ -183,30 +199,35 @@ if __name__ == '__main__':
     print("HELLO!!")
 
     tracker = {k : tracker.Tracker(max_missing = args.max_missing,
-                                   max_distance = args.max_distance * cap[k].get(3) / SCALE,
+                                   max_distance = args.max_distance,
                                    contrail = args.contrail) 
                for k in CAMS}
 
     triangulate = None
-    if args.triangulate and len(CAMS) > 0:
+    if args.triangulate and len(CAMS) > 1:
         triangulate = tri.Triangulate(cfile[CAMS[0]], cfile[CAMS[1]],
-                                      xmin = -3, xmax = 7, ymin = -4, ymax = 5)
+                                      depth = 20 if args.rain else 1,
+                                      xmin = -4, xmax = 8, ymin = -5, ymax = 6, 
+                                      zmin = 2, zmax = 4, zclip = True)
+
+        triangulate.set_view(args.view)
+        triangulate.set_save(args.save)
 
         CAM1, CAM2 = CAMS[0], CAMS[1]
 
     obs3d = []
 
-    t_new    = datetime.datetime.now()
-    t_update = datetime.datetime.now()
+    t = datetime.datetime.now()
+    t_new, t_update = t, t
 
-    drop_wait = 0
+    new_location_delay = args.min_triangulation_update
 
     while True:
 
         key = (cv2.waitKey(30) & 0xff)
         if key == ord("q"): RECORD = False
 
-        if args.view:
+        if args.view and triangulate is None:
 
             for k in CAMS:
 
@@ -218,29 +239,30 @@ if __name__ == '__main__':
 
         if triangulate is not None:
 
-            t = datetime.datetime.now()
-            dt = t - t_new
+            t         = datetime.datetime.now()
+            dt_new    = (t - t_new).total_seconds()
             
-            if dt.total_seconds() > drop_wait:
+            if dt_new > new_location_delay:
 
-                triangulate.triangulate(tracker[CAM1].predict_current_locations(),
-                                        tracker[CAM2].predict_current_locations(), 
-                                        max_reproj_error = 400 / SCALE)
-                triangulate.plot()
+                t_new = datetime.datetime.now()
 
-                t_new = t
+                triangulate.triangulate(tracker[CAM1].get_last_locations(min_obs = 5),
+                                        tracker[CAM2].get_last_locations(min_obs = 5), 
+                                        max_reproj_error = 100)
 
-                drop_wait = np.random.rand()
+                triangulate.update(dt = 0)
 
+                if args.rain:
+                    
+                    new_location_delay = np.random.rand() * args.min_triangulation_update
+                
             t = datetime.datetime.now()
-            dt = t - t_update
-            t_update = t
+            dt_update = (t - t_update).total_seconds()
 
-            triangulate.update(dt.total_seconds())
-            triangulate.save()
+            if args.rain and dt_update > args.rain_frame_delay:
 
-            sleep(0.1)
-
+                t_update = t
+                triangulate.update(dt = dt_update)
 
 
         if not RECORD: break
