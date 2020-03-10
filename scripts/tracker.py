@@ -264,8 +264,13 @@ class Tracker():
             new_idx = idx[1]
 
             new_xy = new_points[new_idx]
-            self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
-                                         areas[new_idx], confs[new_idx])
+
+            if areas is None:
+                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t)
+
+            else: 
+                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
+                                             areas[new_idx], confs[new_idx])
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
@@ -283,8 +288,13 @@ class Tracker():
                 if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
             
             oidx = self.new_object()
-            self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t,
-                                      areas[idx], confs[idx])
+
+            if areas is None:
+                self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t)
+
+            else: 
+                self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t,
+                                          areas[idx], confs[idx])
 
             self.objects[oidx].set_color(colors[idx])
 
