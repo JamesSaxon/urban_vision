@@ -28,6 +28,7 @@ class Object():
         self.xyt = []
         self.area = []
         self.conf = []
+        self.ts   = []
         self.missing = 0
 
         if color is None:
@@ -56,7 +57,7 @@ class Object():
         self.kf_covs  = [0, 0, 0, 0]
 
 
-    def update(self, x, y, t, area = None, conf = None):
+    def update(self, x, y, t, area = None, conf = None, ts = None):
 
         # Yay recursion :-)
         if self.xyt and t - 1 != self.last_time:
@@ -65,6 +66,7 @@ class Object():
         self.xyt.append((x, y, t))
         self.area.append(area)
         self.conf.append(conf)
+        self.ts.append(ts)
 
         if len(self.xyt) == 1: 
 
@@ -116,28 +118,38 @@ class Object():
 
         if len(self.xyt) < 2: return self.xyt
 
-        initial_state_mean = [self.xyt[0][0], 0, self.xyt[0][1], 0]
-
-        kf = KalmanFilter(transition_matrices = Object.kalman_transition,
-                           observation_matrices = Object.kalman_observation,
-                           initial_state_mean = initial_state_mean,
-                           observation_covariance = np.eye(2) * kalman_cov)
-
         measurements = np.array(self.xyt)[:,:2]
         measurements = np.ma.array(measurements, mask = np.isnan(measurements))
-        if depth: measurements = measurements[-depth,:]
+
+        if depth and depth < len(measurements): 
+            measurements = measurements[-depth:,:]
+            times = [t for x, y, t in self.xyt[-depth:]]
+        else:
+            times = [t for x, y, t in self.xyt]
+
+
+        initial_state_mean = [measurements[0, 0], 0, measurements[0, 1], 0]
+
+        kf = KalmanFilter(transition_matrices    = Object.kalman_transition,
+                          observation_matrices   = Object.kalman_observation,
+                          initial_state_mean     = initial_state_mean,
+                          observation_covariance = np.eye(2) * kalman_cov)
 
         means, covariances = kf.smooth(measurements)
 
-        return np.array([means[:,0], means[:,2], [t for x, y, t in self.xyt]]).T
+        return np.array([means[:,0], means[:,2], times]).T
+
 
     @property
     def df(self):
 
         df = pd.DataFrame(self.xyt, columns = ["x", "y", "t"])
-        df["area"] = self.area
-        df["conf"] = self.conf
+
+        df["ts"]   = self.ts
         df["o"]    = self.id
+
+        if any(self.area): df["area"] = self.area
+        if any(self.conf): df["conf"] = self.conf
 
         return df
 
@@ -200,7 +212,7 @@ class Tracker():
         return locations
 
 
-    def update(self, new_points, areas = None, confs = None, colors = None):
+    def update(self, new_points, areas = None, confs = None, ts = None, colors = None):
 
         self.t += 1
 
@@ -224,10 +236,10 @@ class Tracker():
                 oidx = self.new_object()
                 self.objects[oidx].set_color(colors[idx])
 
-                a = None if areas is None else areas[idx]
-                c = None if confs is None else confs[idx]
+                a  = None if areas is None else areas[idx]
+                c  = None if confs is None else confs[idx]
 
-                self.objects[oidx].update(pt[0], pt[1], self.t, a, c)
+                self.objects[oidx].update(pt[0], pt[1], self.t, a, c, ts)
 
             return
 
@@ -264,8 +276,13 @@ class Tracker():
             new_idx = idx[1]
 
             new_xy = new_points[new_idx]
-            self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
-                                         areas[new_idx], confs[new_idx])
+            
+            if areas is None:
+                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, ts = ts)
+
+            else:
+                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
+                                             areas[new_idx], confs[new_idx], ts = ts)
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
@@ -283,8 +300,13 @@ class Tracker():
                 if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
             
             oidx = self.new_object()
-            self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t,
-                                      areas[idx], confs[idx])
+
+            if areas is None:
+                self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t, ts = ts)
+
+            else:
+                self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t,
+                                            areas[idx], confs[idx], ts = ts)
 
             self.objects[oidx].set_color(colors[idx])
 
@@ -303,7 +325,7 @@ class Tracker():
 
             x0, y0, t0 = None, None, None
 
-            xyt = o.xyt if not kalman_cov else o.kalman_smooth(kalman_cov)
+            xyt = o.xyt if not kalman_cov else o.kalman_smooth(kalman_cov, 2 * depth)
 
             for x1, y1, t1 in xyt:
 
