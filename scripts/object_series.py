@@ -20,6 +20,8 @@ import sys, tqdm
 
 import pandas as pd
 
+from tracker import *
+
 colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 
@@ -33,11 +35,13 @@ def main():
     parser.add_argument('--thresh', default = 0.5, type = float)
     parser.add_argument("--categs", default = [], nargs = "+")
     parser.add_argument("--frames", default = 0, type = int)
+    parser.add_argument("--contrail", default = 0, type = int)
     parser.add_argument("--roi", default = False, action = "store_true")
     parser.add_argument("--view", default = False, action = "store_true")
     parser.add_argument("--scale", default = 1, type = float)
     parser.add_argument("--verbose", default = False, action = "store_true")
     parser.add_argument("--no_output", default = False, action = "store_true")
+    parser.add_argument("--kalman", default = 50, type = int, help = "Scale of Kalman error covariance in pixels.")
   
     parser.add_argument('--keep_aspect_ratio', default = False, dest='keep_aspect_ratio', action='store_true',)
   
@@ -48,6 +52,8 @@ def main():
     labels = dataset_utils.read_label_file(args.label) if args.label else None
   
     vid = cv2.VideoCapture(args.input)
+
+    tracker = Tracker(max_missing = 5, max_distance = 250, contrail = args.contrail)
 
     if args.roi:
 
@@ -75,7 +81,7 @@ def main():
     out = None
     if not args.no_output:
     
-        out = cv2.VideoWriter(args.input.replace("mov", "mp4").replace(".mp4", "_det.mp4"), 
+        out = cv2.VideoWriter(args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4"), 
                               cv2.VideoWriter_fourcc(*'mp4v'), 30, 
                               (round(vid.get(3) / args.scale), round(vid.get(4) / args.scale)))
   
@@ -110,7 +116,7 @@ def main():
 
         img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
   
-        draw = ImageDraw.Draw(img)
+        # draw = ImageDraw.Draw(img)
   
         # Run inference.
         ans = engine.detect_with_image(img, threshold = args.thresh, keep_aspect_ratio=args.keep_aspect_ratio, relative_coord=False, top_k = args.k)
@@ -118,48 +124,47 @@ def main():
         # Save result.
         if args.verbose: print('=========================================')
   
-        if ans:
-
-            for obj in ans:
-
+        XY = []
+        for obj in ans:
   
-                label = None
-                if labels is not None and len(args.categs):
+            label = None
+            if labels is not None and len(args.categs):
 
-                    label = labels[obj.label_id]
-                    if label not in args.categs: continue
+                label = labels[obj.label_id]
+                if label not in args.categs: continue
   
 
-                if label is not None and args.verbose:
-                    print(labels[obj.label_id] + ",", end = " ")
+            if label is not None and args.verbose:
+                print(labels[obj.label_id] + ",", end = " ")
   
-                # Draw a rectangle.
-                box = obj.bounding_box.flatten()
-                # draw.rectangle(box, outline = colors[args.categs.index(label)] if len(args.categs) else "red", width = 10)
-                # print('box = ', box)
-                
-                color = colors[args.categs.index(label)] if len(args.categs) else (0, 0, 255)
-
-
-                if args.roi:
-
-                    box[0] += XMIN
-                    box[2] += XMIN
-                    box[1] += YMIN
-                    box[3] += YMIN
-
-                draw_box = (box / args.scale).astype(int)
-                cv2.rectangle(scaled, tuple(draw_box[:2]), tuple(draw_box[2:]), color, 2)
-
-                if args.verbose: 
-                    print('conf. = ', obj.score)
-                    print('-----------------------------------------')
-
-                detected.append([nframe, label, obj.score, box[0], box[1], box[2], box[3]])
-  
-        else: 
+            # Draw a rectangle.
+            box = obj.bounding_box.flatten()
+            # draw.rectangle(box, outline = colors[args.categs.index(label)] if len(args.categs) else "red", width = 10)
+            # print('box = ', box)
             
-            if args.verbose: print('No object detected!')
+            color = colors[args.categs.index(label)] if len(args.categs) else (0, 0, 255)
+
+
+            if args.roi:
+
+                box[0] += XMIN
+                box[2] += XMIN
+                box[1] += YMIN
+                box[3] += YMIN
+
+            draw_box = (box / args.scale).astype(int)
+            cv2.rectangle(scaled, tuple(draw_box[:2]), tuple(draw_box[2:]), color, 2)
+
+            if args.verbose: 
+                print('conf. = ', obj.score)
+                print('-----------------------------------------')
+
+            XY.append((0.5 * (box[0] + box[2]) / args.scale, box[1] / args.scale))
+            detected.append([nframe, label, obj.score, box[0], box[1], box[2], box[3]])
+
+
+        tracker.update(XY)
+        tracker.draw(scaled, kalman_cov = args.kalman)
   
 
         if args.view:
@@ -180,6 +185,8 @@ def main():
         df["y"] = 0.5 * (df.ymin + df.ymax)
 
         df.to_csv(args.input.split(".")[0] + ".csv", index = False)
+
+        tracker.write(args.input.split(".")[0] + "_tracker.csv")
 
 
 if __name__ == '__main__': main()
