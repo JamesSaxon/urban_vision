@@ -4,6 +4,28 @@ import numpy as np
 from object_detection.utils import dataset_util
 
 
+def print_tagging_instructions():
+    print("*******************************************************************")
+    print("Instructions for tagging frames")
+    print("1. Drag a bounding box around the visible part of the object.")
+    print('2. Press "enter" to accept bounding box.  Press "c" to redo.  \
+            Bounding box should turn white when accepted.')
+    print("3.  Once the bounding box is white, press 'p' for person, 'c' for car,\
+            'b' for bus, 'r' to redo, and 'q' to quit the frame.")
+    print("If you tagged a person, car, or bus, the bounding box should change color.")
+    print("To quit before the number of frames specified has been tagged, press Ctrl-C.")
+    print("4. Tag every object (person, car, or bus) in the frame")
+    print("5. Make sure bounding box covers only the visible parts of the object.")
+    print("6. Don't tag objects that are mostly hidden.")
+    print("*******************************************************************")
+
+def print_summary(num_records, output_path):
+    print("*******************************************************************")
+    print("Summary:")
+    print("You tagged {} frames.".format(num_records))
+    print("Output: {}".format(output_path))
+    print("*******************************************************************")
+
 def create_tf_example(example):
     source_id = str.encode(example['source_id'])
     height = example['image_height']
@@ -86,16 +108,13 @@ def read_tfrecord_framenumber(serialized_example):
     return example['image/source_id']
 
 
-def get_frames_tagged(records_file):
-    
-
 def get_priors(videoFile):
     output_path = os.getcwd() + "/train_" + \
                     videoFile.split(".")[0] + "_1.tfrecords"
 
     frames_tagged = set()
     file_paths = []
-    while os.path.exists(output_path):
+    while os.path.exists(output_path) and os.path.getsize(output_path):
         print("{} already exists.".format(output_path))
         vol = int(output_path.split(".")[0].split("_")[-1])
         file_paths.append("train_" + videoFile.split(".")[0] + "_" + \
@@ -103,10 +122,9 @@ def get_priors(videoFile):
         vol += 1
         output_path = os.getcwd() + "/train_" + \
                         videoFile.split(".")[0] + "_" + str(vol) + ".tfrecords"
-        print("new output path: ", output_path)
+    print("new output path: ", output_path)
 
     if file_paths:
-        print("file_paths: ", file_paths)
         tfrecord_dataset = tf.data.TFRecordDataset(file_paths)
         parsed_dataset = tfrecord_dataset.map(read_tfrecord_framenumber)
         for frame_string in parsed_dataset:
