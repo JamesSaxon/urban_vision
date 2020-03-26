@@ -6,6 +6,9 @@ import cv2
 
 
 def print_tagging_instructions():
+    '''
+    Prints instructions for tagging objects.
+    '''
     print("*******************************************************************")
     print("Instructions for tagging frames")
     print("1. Drag a bounding box around the visible part of the object.")
@@ -13,14 +16,17 @@ def print_tagging_instructions():
             Bounding box should turn white when accepted.')
     print("3.  Once the bounding box is white, press 'p' for person, 'c' for car,\
             'b' for bus, 'r' to redo, and 'q' to quit the frame.")
-    print("If you tagged a person, car, or bus, the bounding box should change color.")
-    print("To quit before the number of frames specified has been tagged, press Ctrl-C.")
-    print("4. Tag every object (person, car, or bus) in the frame")
-    print("5. Make sure bounding box covers only the visible parts of the object.")
-    print("6. Don't tag objects that are mostly hidden.")
+    print("4.  If you tagged a person, car, or bus, the bounding box should change color.")
+    print("5.  To quit before the number of frames specified has been tagged, press Ctrl-C.")
+    print("6.  Tag every object (person, car, or bus) in the frame")
+    print("7.  Make sure bounding box covers only the visible parts of the object.")
+    print("8.  Don't tag objects that are mostly hidden.")
     print("*******************************************************************")
 
 def print_summary(num_records, output_path):
+    '''
+    Prints a summary once tagging is finished.
+    '''
     print("*******************************************************************")
     print("Summary:")
     print("You tagged {} frames.".format(num_records))
@@ -28,6 +34,9 @@ def print_summary(num_records, output_path):
     print("*******************************************************************")
 
 def create_tf_example(example):
+    '''
+    Converts a dictionary of features for a single frame to a tf_example object.
+    '''
     video = str.encode(example['video'])
     source_id = str.encode(example['source_id'])
     height = example['image_height']
@@ -63,6 +72,10 @@ def create_tf_example(example):
     return tf_example
 
 def read_tfrecord(serialized_example):
+    '''
+    Takes a serialized example (from a tfrecord file) and returns a dictionary
+    with the same features.
+    '''
     feature_description = {
         'image/video': tf.io.FixedLenFeature([], tf.string),
         'image/height': tf.io.FixedLenFeature([], tf.int64),
@@ -95,6 +108,10 @@ def read_tfrecord(serialized_example):
 
 
 def read_tfrecord_framenumber(serialized_example):
+    '''
+    Takes a serialized example (from a tfrecord file) and returns the frame
+    number feature as a tf tensor.
+    '''
     feature_description = {
         'image/video': tf.io.FixedLenFeature([], tf.string),
         'image/height': tf.io.FixedLenFeature([], tf.int64),
@@ -115,6 +132,13 @@ def read_tfrecord_framenumber(serialized_example):
 
 
 def get_priors(videoFile):
+    '''
+    Looks for tfrecord files in the same directory that contain records from
+    the specified video and returns a list of the frames that have already
+    been tagged from that video.
+
+    Also returns an available output path for a new tfrecord file.
+    '''
     output_path = os.getcwd() + "/train_" + \
                     videoFile.split(".")[0] + "_1.tfrecords"
 
@@ -128,7 +152,6 @@ def get_priors(videoFile):
         vol += 1
         output_path = os.getcwd() + "/train_" + \
                         videoFile.split(".")[0] + "_" + str(vol) + ".tfrecords"
-    #print("new output path: ", output_path)
 
     if file_paths:
         print("file_paths: ", file_paths)
@@ -150,6 +173,14 @@ def order_bounding_box(corner1, corner2):
 
 def update_dict_coords(output_dict, label, class_text, corner1, corner2):
     '''
+    Inputs:
+        output_dict - dictionary of features to update
+        label - (int) label of the new object to update
+        class_text - (string) label text of the new object to update ('car')
+        corner1 and corner2 - (tuples) x and y coordinates of opposite corners
+            of the bounding box for the object to update - can be any two
+            opposite corners.
+    Returns nothing - modifies output_dict in place.
     '''
     bb = order_bounding_box(corner1, corner2)
     output_dict['xmins'].append(bb[0][0])
@@ -160,6 +191,17 @@ def update_dict_coords(output_dict, label, class_text, corner1, corner2):
     output_dict['classes_text'].append(class_text)
 
 def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_image=False):
+    '''
+    Initializes and completes the tagging process for a single frame.
+    Inputs:
+        frameId - (string) frame number
+        image - numpy array
+        videoFile - name of the video from which the frame was taken
+    Returns:
+        output_dict - dictionary of features which can then be serialized to a
+                      tf_example object
+        frame_time - (int) time in seconds it took the user to tag the frame.
+    '''
     output_dict = {'video': str(videoFile), 'source_id': str(int(frameId)), 'image_width':None, 'image_height':None,
                     'xmins':[], 'xmaxs':[], 'ymins':[], 'ymaxs':[], 'classes':[],
                     'classes_text':[]}
@@ -238,6 +280,19 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
 
 
 def update_tracked(output_dict, boxes, clone, next_frameId):
+    '''
+    Once a frame has been tagged and the tagged objects have been tracked in a
+    subsequent frame, this function produces a new output_dict object for the
+    new frame.
+    Inputs:
+        output_dict - dictionary of features for the frame that was tagged
+        boxes - list of boxes provided by the multiTracker for new coordinates
+                of the original tagged objects.
+        clone - numpy array of the image for the new frame
+        next_frameId - number of the frame for the tracked image
+    Returns:
+        new_output_dict - dictionary of features for the tracked frame
+    '''
     new_output_dict = {}
     new_output_dict['video'] = output_dict['video']
     new_output_dict['image_width'] = output_dict['image_width']

@@ -12,6 +12,9 @@ import train
 
 
 def createTrackerByName(trackerType):
+    '''
+    Takes a tracker type and creates a corresponding tracker object.
+    '''
     trackerTypes = ['BOOSTING', 'MIL','KCF', 'TLD', 'MEDIANFLOW', 'GOTURN', 'MOSSE', 'CSRT']
     # Create a tracker based on tracker name
     if trackerType == trackerTypes[0]:
@@ -44,10 +47,14 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--video', required=True, help='Path of the video file.')
-    parser.add_argument('--records', default=20, help='Number of frames to tag.', type=int)
-    parser.add_argument('--duration', help='Duration of the video in minutes.', required=True, type=float)
-    parser.add_argument('--width', help='Screen width in pixels.', type = int, required=True)
-    parser.add_argument('--height', help='Screen height in pixels.', type = int, required=True)
+    parser.add_argument('--records', default=20, help='Number of frames to tag.',
+                        type=int)
+    parser.add_argument('--duration', help='Duration of the video in minutes.',
+                        required=True, type=float)
+    parser.add_argument('--width', help='Screen width in pixels.', type = int,
+                        required=True)
+    parser.add_argument('--height', help='Screen height in pixels.', type = int,
+                        required=True)
     parser.add_argument("--save", default = False, help='Boolean: save tagged images')
     parser.add_argument("--json", default = False, help='Boolean: Write results out to json')
 
@@ -89,7 +96,9 @@ def main():
     time_tagging = 0
     frameId = -1
 
-    #Grab first frame - check if it's in the frame set
+    #Iterate through frames in video - tag and track frames listed in the
+    #frame set.  A keyboard interrupt will result in writing out to file before
+    #all frames in frame set have been tagged.
     try:
         while(cap.isOpened() and num_tagged < num_records):
             frameId = cap.get(1) #current frame number
@@ -97,7 +106,8 @@ def main():
             if not ret:
                 print("Did not read frame")
                 break
-
+                
+            #Check if current frame is in the frame set and is not a duplicate.
             if int(frameId) in frame_set and int(frameId) not in frames_tagged:
                 print("Frame number {}.  This is record {} out of {}.".format(
                                 frameId, num_tagged + 1, num_records))
@@ -133,11 +143,13 @@ def main():
                     multiTracker.add(createTrackerByName(trackerType), image, bbox)
 
                 #Read next frame and update multitracker object
-                #Display bboxes (on cloned image) and ask user if they accept the frame or not.  If not quit
+                #Display bboxes (on cloned image) and ask user if they accept the
+                #frame or not.  If not quit
                 while True:
                     next_frameId = cap.get(1)
                     ret, next_image = cap.read()
-                    next_image = cv2.resize(next_image, screen_dim, interpolation = cv2.INTER_AREA)
+                    next_image = cv2.resize(next_image, screen_dim,
+                                            interpolation = cv2.INTER_AREA)
                     clone = next_image.copy()
                     if not ret:
                         print("Could not read frame.")
@@ -159,7 +171,10 @@ def main():
                     print("Press any other key to quit without accepting.")
                     k = cv2.waitKey(0) & 0xFF
                     if (k == 121):  # y is pressed
-                        next_output_dict = train.update_tracked(output_dict, boxes, next_image, next_frameId)
+                        next_output_dict = train.update_tracked(output_dict,
+                                                                boxes,
+                                                                next_image,
+                                                                next_frameId)
                         next_tf_example = train.create_tf_example(next_output_dict)
                         writer.write(next_tf_example.SerializeToString())
                         records_count += 1
