@@ -1,7 +1,6 @@
 import cv2
 import tensorflow as tf
 import numpy as np
-from object_detection.utils import dataset_util
 import os
 from PIL import Image
 from random import sample
@@ -9,38 +8,6 @@ from random import randint
 import argparse
 
 import train
-
-
-def createTrackerByName(trackerType):
-    '''
-    Takes a tracker type and creates a corresponding tracker object.
-    '''
-    trackerTypes = ['BOOSTING', 'MIL','KCF', 'TLD', 'MEDIANFLOW', 'GOTURN', 'MOSSE', 'CSRT']
-    # Create a tracker based on tracker name
-    if trackerType == trackerTypes[0]:
-        tracker = cv2.TrackerBoosting_create()
-    elif trackerType == trackerTypes[1]:
-        tracker = cv2.TrackerMIL_create()
-    elif trackerType == trackerTypes[2]:
-        tracker = cv2.TrackerKCF_create()
-    elif trackerType == trackerTypes[3]:
-        tracker = cv2.TrackerTLD_create()
-    elif trackerType == trackerTypes[4]:
-        tracker = cv2.TrackerMedianFlow_create()
-    elif trackerType == trackerTypes[5]:
-        tracker = cv2.TrackerGOTURN_create()
-    elif trackerType == trackerTypes[6]:
-        tracker = cv2.TrackerMOSSE_create()
-    elif trackerType == trackerTypes[7]:
-        tracker = cv2.TrackerCSRT_create()
-    else:
-        tracker = None
-        print('Incorrect tracker name')
-        print('Available trackers are:')
-        for t in trackerTypes:
-            print(t)
-
-    return tracker
 
 
 def main():
@@ -55,6 +22,8 @@ def main():
                         required=True)
     parser.add_argument('--height', help='Screen height in pixels.', type = int,
                         required=True)
+    parser.add_argument('--val', default = 0.2, help='Fraction of frames for validation set',
+                        type = float)
     parser.add_argument("--save", default = False, help='Boolean: save tagged images')
     parser.add_argument("--json", default = False, help='Boolean: Write results out to json')
 
@@ -75,9 +44,13 @@ def main():
 
     #Get prior frames
     #Make frame set
-    frames_tagged, output_path = train.get_priors(videoFile)
-    print("frames_tagged: ", frames_tagged)
-    print("output_path: ", output_path)
+    frames_tagged, train_output_path = train.get_priors(videoFile)
+    print("{} frames already tagged from this video.".format(len(frames_tagged)))
+    print("frames_tagged: ", len(frames_tagged))
+    print("output_paths: ")
+    print(train_output_path)
+    val_output_path = train_output_path.replace('train_', 'val_')
+    print(val_output_path)
 
     #Make frames to tag list
     cap = cv2.VideoCapture(videoFile)
@@ -89,12 +62,15 @@ def main():
                 Choose a different number of frames to tag.")
 
     #Initialize writer
-    writer = tf.io.TFRecordWriter(output_path)
+    train_writer = tf.io.TFRecordWriter(train_output_path)
+    val_writer = tf.io.TFRecordWriter(val_output_path)
 
     records_count = 0
     num_tagged = 0
     time_tagging = 0
     frameId = -1
+    train_count = 0
+    val_count = 0
 
     #Iterate through frames in video - tag and track frames listed in the
     #frame set.  A keyboard interrupt will result in writing out to file before
@@ -106,11 +82,11 @@ def main():
             if not ret:
                 print("Did not read frame")
                 break
-                
+            if frameId % 250 == 0: print("Frame number {}.".format(int(frameId)))
             #Check if current frame is in the frame set and is not a duplicate.
             if int(frameId) in frame_set and int(frameId) not in frames_tagged:
                 print("Frame number {}.  This is record {} out of {}.".format(
-                                frameId, num_tagged + 1, num_records))
+                                int(frameId), num_tagged + 1, num_records))
 
                 #Tag all objects in frame - save info as output_dict
                 image = cv2.resize(image, screen_dim, interpolation = cv2.INTER_AREA)
@@ -118,7 +94,13 @@ def main():
 
                 #Write out to tfrecord
                 tf_example = train.create_tf_example(output_dict)
-                writer.write(tf_example.SerializeToString())
+                x = np.random.uniform()
+                if x < args.val:
+                    val_writer.write(tf_example.SerializeToString())
+                    val_count += 1
+                else:
+                    train_writer.write(tf_example.SerializeToString())
+                    train_count += 1
                 records_count += 1
                 num_tagged += 1
                 time_tagging += frame_time
@@ -140,7 +122,7 @@ def main():
 
                 #Add bboxes to tracker object
                 for bbox in bboxes:
-                    multiTracker.add(createTrackerByName(trackerType), image, bbox)
+                    multiTracker.add(train.createTrackerByName(trackerType), image, bbox)
 
                 #Read next frame and update multitracker object
                 #Display bboxes (on cloned image) and ask user if they accept the
@@ -176,7 +158,13 @@ def main():
                                                                 next_image,
                                                                 next_frameId)
                         next_tf_example = train.create_tf_example(next_output_dict)
-                        writer.write(next_tf_example.SerializeToString())
+                        x = np.random.uniform()
+                        if x < args.val:
+                            val_writer.write(next_tf_example.SerializeToString())
+                            val_count += 1
+                        else:
+                            train_writer.write(next_tf_example.SerializeToString())
+                            train_count += 1
                         records_count += 1
                     else:
                         cv2.destroyWindow('MultiTracker')
@@ -191,7 +179,8 @@ def main():
     cv2.waitKey(10)
     cv2.destroyAllWindows()
     cv2.waitKey(10)
-    writer.close()
-    train.print_summary(records_count, output_path)
+    train_writer.close()
+    val_writer.close()
+    train.print_summary(train_count, val_count, train_output_path, val_output_path)
 
 if __name__ == '__main__': main()

@@ -1,7 +1,6 @@
 import os, time
 import tensorflow as tf
 import numpy as np
-from object_detection.utils import dataset_util
 import cv2
 
 
@@ -23,15 +22,39 @@ def print_tagging_instructions():
     print("8.  Don't tag objects that are mostly hidden.")
     print("*******************************************************************")
 
-def print_summary(num_records, output_path):
+def print_summary(train_count, val_count, train_output_path, val_output_path):
     '''
     Prints a summary once tagging is finished.
     '''
+    train_filename = train_output_path.split('/')[-1]
+    val_filename = val_output_path.split('/')[-1]
     print("*******************************************************************")
     print("Summary:")
-    print("You tagged {} frames.".format(num_records))
-    print("Output: {}".format(output_path))
+    print("You tagged {} frames.".format(train_count + val_count))
+    print("{} records in {}, and {} records in {}.".format(train_count,
+                                                        train_filename,
+                                                        val_count,
+                                                        val_filename))
     print("*******************************************************************")
+
+def _int64_feature(value):
+  return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+
+def _int64_list_feature(value):
+  return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
+
+
+def _bytes_feature(value):
+  return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
+def _bytes_list_feature(value):
+  return tf.train.Feature(bytes_list=tf.train.BytesList(value=value))
+
+
+def _float_list_feature(value):
+  return tf.train.Feature(float_list=tf.train.FloatList(value=value))
 
 def create_tf_example(example):
     '''
@@ -41,7 +64,7 @@ def create_tf_example(example):
     source_id = str.encode(example['source_id'])
     height = example['image_height']
     width = example['image_width']
-    image_format = b'jpg'
+    image_format = str.encode('jpg')
     encoded_image_data = example['image_encoded']
 
     xmins = list(np.array(example['xmins'])/width) # List of normalized left x coordinates in bounding box (1 per box)
@@ -56,18 +79,18 @@ def create_tf_example(example):
         classes_text.append(label.encode('utf-8')) # List of string class name of bounding box (1 per box)
     classes = example['classes'] # List of integer class id of bounding box (1 per box)
     tf_example = tf.train.Example(features=tf.train.Features(feature={
-        'image/video': dataset_util.bytes_feature(video),
-        'image/height': dataset_util.int64_feature(height),
-        'image/width': dataset_util.int64_feature(width),
-        'image/source_id': dataset_util.bytes_feature(source_id),
-        'image/encoded': dataset_util.bytes_feature(encoded_image_data),
-        'image/format': dataset_util.bytes_feature(image_format),
-        'image/object/bbox/xmin': dataset_util.float_list_feature(xmins),
-        'image/object/bbox/xmax': dataset_util.float_list_feature(xmaxs),
-        'image/object/bbox/ymin': dataset_util.float_list_feature(ymins),
-        'image/object/bbox/ymax': dataset_util.float_list_feature(ymaxs),
-        'image/object/class/label': dataset_util.int64_list_feature(classes),
-        'image/object/class/text': dataset_util.bytes_list_feature(classes_text),
+        'image/video': _bytes_feature(video),
+        'image/height': _int64_feature(height),
+        'image/width': _int64_feature(width),
+        'image/source_id': _bytes_feature(source_id),
+        'image/encoded': _bytes_feature(encoded_image_data),
+        'image/format': _bytes_feature(image_format),
+        'image/object/bbox/xmin': _float_list_feature(xmins),
+        'image/object/bbox/xmax': _float_list_feature(xmaxs),
+        'image/object/bbox/ymin': _float_list_feature(ymins),
+        'image/object/bbox/ymax': _float_list_feature(ymaxs),
+        'image/object/class/label': _int64_list_feature(classes),
+        'image/object/class/text': _bytes_list_feature(classes_text),
     }))
     return tf_example
 
@@ -91,18 +114,6 @@ def read_tfrecord(serialized_example):
         'image/object/class/text': tf.io.FixedLenSequenceFeature([], dtype=tf.string, allow_missing=True)
     }
     example = tf.io.parse_single_example(serialized_example, feature_description)
-    image_video = example['image/video']
-    image_height = example['image/height']
-    image_width = example['image/width']
-    image_source_id = example['image/source_id']
-    image_encoded = example['image/encoded']
-    image_format = example['image/format']
-    image_xmins = example['image/object/bbox/xmin']
-    image_xmaxs = example['image/object/bbox/xmax']
-    image_ymins = example['image/object/bbox/ymin']
-    image_ymaxs = example['image/object/bbox/ymax']
-    image_labels = example['image/object/class/label']
-    image_classes = example['image/object/class/text']
 
     return example
 
@@ -207,7 +218,7 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
                     'classes_text':[]}
     output_dict['image_height']=image.shape[0]
     output_dict['image_width']=image.shape[1]
-    _, im_buf_arr = cv2.imencode(".jpg", image[:1,:1,:])
+    _, im_buf_arr = cv2.imencode(".jpg", image)
     output_dict['image_encoded']=im_buf_arr.tobytes()
     clone = image.copy()
     cv2.namedWindow("image")
@@ -234,7 +245,7 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
         if key == ord("p"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 0), 1)
-            update_dict_coords(output_dict, 1, 'person', corner1, corner2)
+            update_dict_coords(output_dict, 3, 'person', corner1, corner2)
             cv2.imshow('image', image)
             clone = image.copy()
 
@@ -250,7 +261,7 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
         if key == ord("c"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 255), 1)
-            update_dict_coords(output_dict, 3, 'car', corner1, corner2)
+            update_dict_coords(output_dict, 1, 'car', corner1, corner2)
             cv2.imshow('image', image)
             clone = image.copy()
 
@@ -277,6 +288,37 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
     cv2.waitKey(10)
 
     return output_dict, frame_time
+
+def createTrackerByName(trackerType):
+    '''
+    Takes a tracker type and creates a corresponding tracker object.
+    '''
+    trackerTypes = ['BOOSTING', 'MIL','KCF', 'TLD', 'MEDIANFLOW', 'GOTURN', 'MOSSE', 'CSRT']
+    # Create a tracker based on tracker name
+    if trackerType == trackerTypes[0]:
+        tracker = cv2.TrackerBoosting_create()
+    elif trackerType == trackerTypes[1]:
+        tracker = cv2.TrackerMIL_create()
+    elif trackerType == trackerTypes[2]:
+        tracker = cv2.TrackerKCF_create()
+    elif trackerType == trackerTypes[3]:
+        tracker = cv2.TrackerTLD_create()
+    elif trackerType == trackerTypes[4]:
+        tracker = cv2.TrackerMedianFlow_create()
+    elif trackerType == trackerTypes[5]:
+        tracker = cv2.TrackerGOTURN_create()
+    elif trackerType == trackerTypes[6]:
+        tracker = cv2.TrackerMOSSE_create()
+    elif trackerType == trackerTypes[7]:
+        tracker = cv2.TrackerCSRT_create()
+    else:
+        tracker = None
+        print('Incorrect tracker name')
+        print('Available trackers are:')
+        for t in trackerTypes:
+            print(t)
+
+    return tracker
 
 
 def update_tracked(output_dict, boxes, clone, next_frameId):
@@ -315,7 +357,7 @@ def update_tracked(output_dict, boxes, clone, next_frameId):
     new_output_dict['ymaxs'] = updated_ymaxs
     new_output_dict['source_id'] = str(int(next_frameId))
 
-    _, next_im_buf_arr = cv2.imencode(".jpg", clone[:1,:1,:])
+    _, next_im_buf_arr = cv2.imencode(".jpg", clone)
     new_output_dict['image_encoded']=next_im_buf_arr.tobytes()
 
     return new_output_dict
