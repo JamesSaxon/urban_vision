@@ -25,11 +25,13 @@ class Object():
 
         self.id = id
 
-        self.xyt = []
+        self.xyt  = []
         self.area = []
         self.conf = []
         self.ts   = []
         self.missing = 0
+
+        self.current_area = 0
 
         if color is None:
 
@@ -67,6 +69,8 @@ class Object():
         self.area.append(area)
         self.conf.append(conf)
         self.ts.append(ts)
+
+        self.current_area = area
 
         if len(self.xyt) == 1: 
 
@@ -128,7 +132,11 @@ class Object():
             times = [t for x, y, t in self.xyt]
 
 
-        initial_state_mean = [measurements[0, 0], 0, measurements[0, 1], 0]
+        start_smooth = 0
+        while np.isnan(measurements[start_smooth, 0]): start_smooth += 1
+
+        initial_state_mean = [measurements[start_smooth, 0], 0,
+                              measurements[start_smooth, 1], 0]
 
         kf = KalmanFilter(transition_matrices    = Object.kalman_transition,
                           observation_matrices   = Object.kalman_observation,
@@ -138,6 +146,20 @@ class Object():
         means, covariances = kf.smooth(measurements)
 
         return np.array([means[:,0], means[:,2], times]).T
+
+
+    def out_of_roi(self, t, roi, roi_buffer = 0):
+
+        if roi is None: return False
+
+        x, y = self.predict_location(t)
+
+        if x < roi["xmin"] + roi_buffer: return True
+        if x > roi["xmax"] - roi_buffer: return True
+        if y < roi["ymin"] + roi_buffer: return True
+        if y > roi["ymax"] - roi_buffer: return True
+
+        return False
 
 
     @property
@@ -161,8 +183,12 @@ class Object():
 
 class Tracker():
 
-    def __init__(self, max_missing = 4, max_distance = 50, 
-                 predict_match_locations = False, contrail = 0, color = (255, 255, 255)):
+    def __init__(self, 
+                 max_missing = 4, max_distance = 50, 
+                 min_distance_overlap = 0.02,
+                 predict_match_locations = False,
+                 kalman_cov = 0,
+                 contrail = 0, color = (255, 255, 255)):
 
         self.oid = 0
         self.objects = {}
@@ -170,12 +196,24 @@ class Tracker():
         self.t = 0
 
         self.predict_match_locations = predict_match_locations
+        self.kalman_cov = kalman_cov
 
         self.CONTRAIL = contrail
+
         self.MAX_MISSING = max_missing
-        self.MAX_DISTANCE = max_distance
+
+        self.MAX_DISTANCE    = max_distance
+        self.MIN_DISTANCE_OR = min_distance_overlap
 
         self.color = color
+
+        self.roi = None
+        self.roi_buffer = 0
+
+    def set_roi(self, roi, roi_buffer = 0):
+
+        self.roi = roi
+        self.roi_buffer = roi_buffer
 
 
     def new_object(self):
@@ -186,7 +224,7 @@ class Tracker():
 
         return self.oid - 1
 
-    def get_last_locations(self, return_unmatched = False, min_obs = 0):
+    def get_last_locations(self, return_unmatched = False, return_dict = False, min_obs = 0):
 
         object_unmatched = {k for k, v in self.objects.items() 
                             if v.active and v.nobs > min_obs}
@@ -195,6 +233,7 @@ class Tracker():
                               for k in object_unmatched])
 
         if return_unmatched: return object_unmatched, locations
+        if return_dict:      return {o : l for o, l in zip(object_unmatched, locations)}
 
         return locations
 
@@ -211,6 +250,19 @@ class Tracker():
 
         return locations
 
+    def deactivate_objects(self):
+
+        for o in self.objects.values():
+
+            if not o.active: continue
+
+            if self.t - o.last_time > self.MAX_MISSING:
+                o.deactivate()
+                continue
+
+            if o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer):
+                o.deactivate()
+
 
     def update(self, new_points, areas = None, confs = None, ts = None, colors = None):
 
@@ -219,11 +271,7 @@ class Tracker():
         # If there are no new points, abort.
         if new_points is None or not len(new_points):
 
-            # Get rid of objects "hanging around..."
-            for o in self.objects.values():
-                if self.t - o.last_time > self.MAX_MISSING:
-                    o.deactivate()
-
+            self.deactivate_objects()
             return
 
         if type(colors) is not list: colors = [colors for x in new_points]
@@ -290,6 +338,7 @@ class Tracker():
         # The new_indexes are not yet new -- just potential/unmatched.
         # If they have a distance within the distance cut-off to an existing object
         # then we don't want to create a new object for them.
+        # DO NOT create new objects in the ROI cut-off or buffer.
         D.mask = False
         for idx in new_indexes:
 
@@ -298,39 +347,44 @@ class Tracker():
 
             else: 
                 if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
+
+            x, y = new_points[idx]
+            if x < self.roi["xmin"] + self.roi_buffer: continue 
+            if x > self.roi["xmax"] - self.roi_buffer: continue 
+            if y < self.roi["ymin"] + self.roi_buffer: continue 
+            if y > self.roi["ymax"] - self.roi_buffer: continue 
             
             oidx = self.new_object()
 
             if areas is None:
-                self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t, ts = ts)
+                self.objects[oidx].update(x, y, self.t, ts = ts)
 
             else:
-                self.objects[oidx].update(new_points[idx][0], new_points[idx][1], self.t,
-                                            areas[idx], confs[idx], ts = ts)
+                self.objects[oidx].update(x, y, self.t, areas[idx], confs[idx], ts = ts)
 
             self.objects[oidx].set_color(colors[idx])
 
 
-        for o in self.objects.values():
-            if self.t - o.last_time > self.MAX_MISSING:
-                o.deactivate()
+        self.deactivate_objects()
 
 
-    def draw(self, img, scale = 1, depth = None, kalman_cov = 0):
+    def draw(self, img, scale = 1):
 
-        if depth is None:
-            depth = self.CONTRAIL
+        depth = self.CONTRAIL
 
         for o in self.objects.values():
+
+            if o.last_time < self.t - depth: continue
+            if o.nobs < 5: continue
 
             x0, y0, t0 = None, None, None
 
-            xyt = o.xyt if not kalman_cov else o.kalman_smooth(kalman_cov, 2 * depth)
+            xyt = o.xyt if not self.kalman_cov else o.kalman_smooth(kalman_cov = self.kalman_cov, depth = int(1.5 * depth))
 
             for x1, y1, t1 in xyt:
 
                 # If not Kalman smoothing, these can be empty.
-                if x1 is np.nan: continue
+                if np.isnan(x1): continue
 
                 x1, y1 = int(x1 / scale), int(y1 / scale)
 
@@ -354,6 +408,10 @@ class Tracker():
                 xy = tuple([int(x / scale), int(y / scale)])
                 img = cv2.circle(img, xy, 5, (255, 255, 255), -1)
                 img = cv2.circle(img, xy, 5, o.color, 2)
+
+                if o.current_area:
+                    length = np.sqrt(o.current_area)
+                    img = cv2.circle(img, xy, int(self.MAX_DISTANCE * length / scale), o.color, 1)
 
         return img
 
