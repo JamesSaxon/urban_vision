@@ -5,6 +5,65 @@ from edgetpu.utils import dataset_utils
 
 from PIL import Image
 
+
+def bbox_intersection(objA, objB):
+
+    xminA, yminA, xmaxA, ymaxA = objA.bounding_box.flatten()
+    xminB, yminB, xmaxB, ymaxB = objB.bounding_box.flatten()
+
+    # coordinates of the intersection rectangle
+    xmin = max(xminA, xminB)
+    ymin = max(yminA, yminB)
+    xmax = min(xmaxA, xmaxB)
+    ymax = min(ymaxA, ymaxB)
+
+    # compute the area of intersection rectangle
+    intersection = max(0, xmax - xmin) * max(0, ymax - ymin)
+
+    return intersection
+
+def max_fractional_intersection(objA, objB):
+
+    intx_area = bbox_intersection(objA, objB)
+
+    xminA, yminA, xmaxA, ymaxA = objA.bounding_box.flatten()
+    xminB, yminB, xmaxB, ymaxB = objB.bounding_box.flatten()
+
+    area_A = (xmaxA - xminA) * (ymaxA - yminA)
+    area_B = (xmaxB - xminB) * (ymaxB - yminB)
+
+    return max(intx_area / area_A, intx_area / area_B)
+
+
+def flag_duplicates(raw_detections, max_overlap = 0.25, labels = None):
+
+    duplicates = []
+    for io, iobj in enumerate(raw_detections):
+
+        i_label = iobj.label_id
+        if i_label in [2, 5, 7]: i_label = -1
+
+        for jo, jobj in enumerate(raw_detections[io+1:]):
+
+            jo += io + 1
+
+            if labels is not None and iobj.label_id not in labels: continue
+
+            j_label = iobj.label_id
+            if j_label in [2, 5, 7]: j_label = -1
+
+            if i_label != j_label: continue
+
+            intx_frac = max_fractional_intersection(iobj, jobj)
+            
+            if intx_frac > max_overlap:
+                
+                duplicates.append(io if iobj.score < jobj.score else jo)
+
+    return duplicates
+
+
+
 class Detector():
 
     colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
@@ -16,10 +75,14 @@ class Detector():
                  categs = ["person"], thresh = 0.6, k = 1,
                  loc = "upper center", verbose = False):
 
+
+        print("Loading", model, labels)
+
         self.engine = DetectionEngine(model)
         self.labels = dataset_utils.read_label_file(labels) if labels else None
 
         self.categs = categs
+        self.ncategs = {li for li, l in self.labels.items() if l in categs}
 
         self.thresh = thresh
         self.k      = k
@@ -41,97 +104,133 @@ class Detector():
         self.verbose = verbose
 
 
-    def detect(self, img, color = None,
-               return_image = False, return_areas = False, return_confs = False):
+    ##  def detect(self, img, color = None,
+    ##             return_image = False, return_areas = False, return_confs = False):
 
 
-        tensor = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    ##      tensor = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
-        ans = self.engine.detect_with_image(tensor,
-                                            threshold = self.thresh, top_k = self.k,
-                                            keep_aspect_ratio = False, relative_coord = False)
+    ##      raw_detections = self.engine.detect_with_image(tensor,
+    ##                                          threshold = self.thresh, top_k = self.k,
+    ##                                          keep_aspect_ratio = False, relative_coord = False)
+
+    ##      duplicates = flag_duplicates(raw_detections, labels = self.ncategs)
+
+    ##      XY, AREAS, CONFS = [], [], []
+
+    ##      for iobj, obj in enumerate(raw_detections):
+
+    ##          # If the labels file and category filter
+    ##          # are both defined, then filter.
+    ##          label = None
+    ##          if self.labels is not None and len(self.categs):
+
+    ##              if obj.label_id not in self.ncategs: continue
+    ##              label = self.labels[obj.label_id]
+
+    ##          is_duplicate = iobj in duplicates
+
+    ##          if self.labels is not None and self.verbose:
+    ##              print(self.labels[obj.label_id] + ",", end = " ")
+
+    ##          if is_duplicate: continue
+
+    ##          # Draw a rectangle.
+    ##          box = obj.bounding_box.flatten()
+    ##          xmin, ymin, xmax, ymax = box
+
+    ##          if return_image: 
+
+    ##              if is_duplicate: color = tuple([int((c + 255)/2) for c in color])
+    ##              width = 2 if is_duplicate else 4
+
+    ##              cv2.rectangle(img, (int(xmin), int(ymin)), (int(xmax), int(ymax)), color, 4)
+
+    ##          if self.verbose:
+    ##              print('conf. = ', obj.score)
+    ##              print('-----------------------------------------')
+
+    ##          if self.hloc == "left":   x = xmax
+    ##          if self.hloc == "center": x = (xmax + xmin) / 2
+    ##          if self.hloc == "right":  x = xmin
+
+    ##          if self.vloc == "upper":  y = ymin
+    ##          if self.vloc == "middle": y = (ymax + ymin) / 2
+    ##          if self.vloc == "lower":  y = ymax
+
+    ##          XY.append((x, y))
+    ##          AREAS.append((xmax - xmin) * (ymax - ymin))
+    ##          CONFS.append(obj.score)
+
+    ##      retval = [np.array(XY)]
+
+    ##      if return_areas : retval.append(np.array(AREAS))
+    ##      if return_confs : retval.append(np.array(CONFS))
+    ##      if return_image : retval.append(img)
+
+    ##      return retval
+
+
+    def detect(self, frame, roi = None, return_image = True):
+
+        if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
+        else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
+
+        image = Image.fromarray(cv2.cvtColor(frame[roi_ymin:roi_ymax, roi_xmin:roi_xmax], cv2.COLOR_BGR2RGB))
+
+        raw_detections = self.engine.detect_with_image(image, threshold = self.thresh,
+                                            keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
+
+        duplicates = flag_duplicates(raw_detections, labels = self.ncategs)
 
         XY, AREAS, CONFS = [], [], []
-        for obj in ans:
 
-            # If the labels file and category filter
-            # are both defined, then filter.
+        for iobj, obj in enumerate(raw_detections):
+
+            # If the label is irrelevant, just get out.
             label = None
             if self.labels is not None and len(self.categs):
 
+                if obj.label_id not in self.ncategs: continue
                 label = self.labels[obj.label_id]
-                if label not in self.categs: continue
 
-
-            if self.labels is not None and self.verbose:
-                print(self.labels[obj.label_id] + ",", end = " ")
-
-            # Draw a rectangle.
             box = obj.bounding_box.flatten()
-            xmin, ymin, xmax, ymax = box
+            box[0] += roi_xmin
+            box[2] += roi_xmin
+            box[1] += roi_ymin
+            box[3] += roi_ymin
+            draw_box = box.astype(int)
 
-            if color is None:
-                color = Detector.colors[self.categs.index(label)] if len(self.categs) else (0, 0, 255)
+            is_duplicate = iobj in duplicates
 
-            if return_image: cv2.rectangle(img, (int(xmin), int(ymin)), (int(xmax), int(ymax)), color, 1)
+            if return_image: 
 
-            if self.verbose:
-                print('conf. = ', obj.score)
-                print('-----------------------------------------')
+                color = Detector.colors[self.categs.index(label)] if len(self.categs) else (255, 255, 255)
 
-            if self.hloc == "left":   x = xmax
-            if self.hloc == "center": x = (xmax + xmin) / 2
-            if self.hloc == "right":  x = xmin
+                if is_duplicate: color = tuple([int((c + 255)/2) for c in color])
+                width = 2 if is_duplicate else 4
 
-            if self.vloc == "upper":  y = ymin
-            if self.vloc == "middle": y = (ymax + ymin) / 2
-            if self.vloc == "lower":  y = ymax
+                cv2.rectangle(frame, tuple(draw_box[:2]), tuple(draw_box[2:]), color, width)
 
-            XY.append((x, y))
-            AREAS.append((xmax - xmin) * (ymax - ymin))
+            if is_duplicate: continue
+
+            box_xmin, box_ymin, box_xmax, box_ymax = box
+
+            if self.hloc == "left":   x = box_xmax
+            if self.hloc == "center": x = (box_xmax + box_xmin) / 2
+            if self.hloc == "right":  x = box_xmin
+
+            if self.vloc == "upper":  y = box_ymin
+            if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
+            if self.vloc == "lower":  y = box_ymax
+
+            XY.append((x,y))
+            AREAS.append((box[2]-box[0])*(box[3]-box[1]))
             CONFS.append(obj.score)
 
-        retval = [np.array(XY)]
 
-        if return_areas : retval.append(np.array(AREAS))
-        if return_confs : retval.append(np.array(CONFS))
-        if return_image : retval.append(img)
-
-        return retval
-
-
-    def detect_roi(self, frame, roi=None, view=False, return_areas = False, return_confs = False):
-        '''
-        Inputs: image, roi coordinates,
-        '''
-        xmin = roi[0]
-        ymin = roi[1]
-        xmax = roi[2]
-        ymax = roi[3]
-
-        img = frame
-        img_detect = frame[ymin:ymax, xmin:xmax]
-        image = Image.fromarray(cv2.cvtColor(img_detect, cv2.COLOR_BGR2RGB))
-        ans = self.engine.detect_with_image(image, threshold = self.thresh, keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
-        XY, AREAS, CONFS = [], [], []
-        if ans:
-            for obj in ans:
-                box = obj.bounding_box.flatten()
-                box[0] += xmin
-                box[2] += xmin
-                box[1] += ymin
-                box[3] += ymin
-                draw_box = box.astype(int)
-                if view: cv2.rectangle(img, tuple(draw_box[:2]), tuple(draw_box[2:]), (0,255,255), 2)
-                x = int((box[0] + box[2])//2)
-                y = int((box[1] + box[3])//2)
-                XY.append((x,y))
-                AREAS.append((box[2]-box[0])*(box[3]-box[1]))
-                CONFS.append(obj.score)
-        retval = [XY]
-        if return_areas: retval.append(AREAS)
-        if return_confs : retval.append(CONFS)
-        if view: retval.append(img)
+        retval = {"xy" : XY, "areas" : AREAS, "confs" : CONFS}
+        if return_image: retval["image"] = frame
 
         return retval
 
