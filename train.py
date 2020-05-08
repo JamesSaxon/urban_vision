@@ -1,4 +1,4 @@
-import os, time
+import os, glob, time
 import tensorflow as tf
 import numpy as np
 import cv2
@@ -150,28 +150,47 @@ def get_priors(videoFile):
 
     Also returns an available output path for a new tfrecord file.
     '''
-    output_path = os.getcwd() + "/train_" + \
-                    videoFile.split(".")[0] + "_1.tfrecords"
+    stem_train = videoFile.split(".")[0] + "_train.record"
+    stem_val = videoFile.split(".")[0] + "_val.record"
+    record_group = glob.glob(stem_train + '*')
+    record_group.extend(glob.glob(stem_val + '*'))
+    output_path = stem_train + "-00000-of-00001"
+    if not record_group:
+        return 1, set(), output_path
+
+    #If prior records for this video, get volume numbers:
+    volumes = []
+    file_paths = []
+    for record in record_group:
+        volumes.append(int(record.split("-")[-3]))
+        if os.path.getsize(record):
+            file_paths.append(record)
 
     frames_tagged = set()
-    file_paths = []
-    while os.path.exists(output_path) and os.path.getsize(output_path):
-        print("{} already exists.".format(output_path))
-        vol = int(output_path.split(".")[0].split("_")[-1])
-        file_paths.append("train_" + videoFile.split(".")[0] + "_" + \
-                          str(vol) + ".tfrecords")
-        vol += 1
-        output_path = os.getcwd() + "/train_" + \
-                        videoFile.split(".")[0] + "_" + str(vol) + ".tfrecords"
-
     if file_paths:
-        print("file_paths: ", file_paths)
         tfrecord_dataset = tf.data.TFRecordDataset(file_paths)
         parsed_dataset = tfrecord_dataset.map(read_tfrecord_framenumber)
         for frame_bytestring in parsed_dataset:
             frames_tagged.add(int(str(frame_bytestring.numpy(), 'utf-8')))
+    volume = max(volumes) + 1
+    output_path = stem_train + "-" + str(volume).zfill(5) + "-of-" + str(volume+1).zfill(5)
+    return volume+1, frames_tagged, output_path
 
-    return frames_tagged, output_path
+
+def update_record_names(output_path, vol):
+    '''
+    Changes the volume number in file names of train and val records with the same
+    starting path.
+    '''
+    video_id = output_path.split("_train.record")[0]
+    for filepath in glob.glob(video_id + "_*.record*"):
+        filename_list = filepath.split("-")
+        filename_list[-1] = str(vol).zfill(5)
+        new_filepath = "-".join(filename_list)
+        os.replace(filepath, new_filepath)
+
+
+
 
 def order_bounding_box(corner1, corner2):
     '''
@@ -181,6 +200,7 @@ def order_bounding_box(corner1, corner2):
     upper_left = (min(corner1[0], corner2[0]), min(corner1[1], corner2[1]))
     lower_right = (max(corner1[0], corner2[0]), max(corner1[1], corner2[1]))
     return [upper_left, lower_right]
+
 
 def update_dict_coords(output_dict, label, class_text, corner1, corner2):
     '''
@@ -200,6 +220,7 @@ def update_dict_coords(output_dict, label, class_text, corner1, corner2):
     output_dict['ymaxs'].append(bb[1][1])
     output_dict['classes'].append(label)
     output_dict['classes_text'].append(class_text)
+
 
 def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_image=False):
     '''
@@ -245,7 +266,7 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
         if key == ord("p"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 0), 1)
-            update_dict_coords(output_dict, 3, 'person', corner1, corner2)
+            update_dict_coords(output_dict, 1, 'person', corner1, corner2)
             cv2.imshow('image', image)
             clone = image.copy()
 
@@ -253,7 +274,7 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
         if key == ord("b"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 0, 255), 1)
-            update_dict_coords(output_dict, 2, 'bus', corner1, corner2)
+            update_dict_coords(output_dict, 3, 'bus', corner1, corner2)
             cv2.imshow('image', image)
             clone = image.copy()
 
@@ -261,7 +282,7 @@ def tag_objects(frameId, image, videoFile, write_to_json=False, save_tagged_imag
         if key == ord("c"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 255), 1)
-            update_dict_coords(output_dict, 1, 'car', corner1, corner2)
+            update_dict_coords(output_dict, 2, 'car', corner1, corner2)
             cv2.imshow('image', image)
             clone = image.copy()
 

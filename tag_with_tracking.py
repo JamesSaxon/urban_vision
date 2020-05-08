@@ -19,9 +19,9 @@ def main():
     parser.add_argument('--duration', help='Duration of the video in minutes.',
                         required=True, type=float)
     parser.add_argument('--width', help='Screen width in pixels.', type = int,
-                        required=True)
+                        default=2560)
     parser.add_argument('--height', help='Screen height in pixels.', type = int,
-                        required=True)
+                        default=1600)
     parser.add_argument('--val', default = 0.2, help='Fraction of frames for validation set',
                         type = float)
     parser.add_argument("--save", default = False, help='Boolean: save tagged images')
@@ -44,14 +44,12 @@ def main():
 
     #Get prior frames
     #Make frame set
-    frames_tagged, train_output_path = train.get_priors(videoFile)
+    vol, frames_tagged, train_output_path = train.get_priors(videoFile)
     print("{} frames already tagged from this video.".format(len(frames_tagged)))
-    print("frames_tagged: ", len(frames_tagged))
     print("output_paths: ")
     print(train_output_path)
-    val_output_path = train_output_path.replace('train_', 'val_')
+    val_output_path = train_output_path.replace('_train', '_val')
     print(val_output_path)
-
     #Make frames to tag list
     cap = cv2.VideoCapture(videoFile)
     frameRate = cap.get(5) #frame rate
@@ -60,7 +58,6 @@ def main():
     except ValueError:
         print("Sample larger than population or is negative - \
                 Choose a different number of frames to tag.")
-
     #Initialize writer
     train_writer = tf.io.TFRecordWriter(train_output_path)
     val_writer = tf.io.TFRecordWriter(val_output_path)
@@ -82,6 +79,7 @@ def main():
             if not ret:
                 print("Did not read frame")
                 break
+            
             if frameId % 250 == 0: print("Frame number {}.".format(int(frameId)))
             #Check if current frame is in the frame set and is not a duplicate.
             if int(frameId) in frame_set and int(frameId) not in frames_tagged:
@@ -158,7 +156,6 @@ def main():
                                                                 next_image,
                                                                 next_frameId)
                         next_tf_example = train.create_tf_example(next_output_dict)
-                        x = np.random.uniform()
                         if x < args.val:
                             val_writer.write(next_tf_example.SerializeToString())
                             val_count += 1
@@ -182,5 +179,6 @@ def main():
     train_writer.close()
     val_writer.close()
     train.print_summary(train_count, val_count, train_output_path, val_output_path)
+    train.update_record_names(train_output_path, vol)
 
 if __name__ == '__main__': main()
