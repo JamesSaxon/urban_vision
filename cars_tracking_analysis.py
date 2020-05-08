@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import argparse
 
 def main():
@@ -7,10 +8,15 @@ def main():
     parser.add_argument('--file', required=True, help='Path of the csv file.')
     parser.add_argument('--fr', default=30, help='Frame rate in frames per second',
                         type=int)
+    parser.add_argument('--yi', default=1050, type=int)
+    parser.add_argument('--yf', default=585, type=int)
+    parser.add_argument('--dist', default=21.5)
 
     args = parser.parse_args()
     frame_rate = args.fr
-
+    yi = args.yi
+    yf = args.yf
+    dist = args.dist
     # Bring in csv data
     df = pd.read_csv(args.file)
 
@@ -37,5 +43,27 @@ def main():
     cpm_S = objects_df['direction'].value_counts()['S']/delta_t
     print("Going north: {:.2f} cars per minute".format(cpm_N))
     print("Going south: {:.2f} cars per minute".format(cpm_S))
+
+    s_avg = []
+    for o in objects_df.index:
+        if objects_df.loc[o, 'direction']=='S':
+            s_avg.append(np.nan)
+            continue
+        df_mini = df[df['o']==o][['y', 't']]
+        y1 = None
+        t1 = None
+        for _, row in df_mini.iterrows():
+            y=row['y']
+            t=row['t']
+            if y1 and y < yi and y1 > yi:
+                ti = t - (float((yi-y)*(t-t1))/(y1-y))
+            if y1 and y < yf and y1 > yf:
+                tf = t - (float((yf-y)*(t-t1))/(y1-y))
+                break
+            y1 = y
+            t1 = t
+        s_avg.append(2.237*dist*frame_rate/(tf - ti))
+    objects_df['s_avg'] = s_avg
+    print("Average speed for cars traveling north is: {:.2f} miles per hour.".format(objects_df.s_avg.mean()))
 
 if __name__ == '__main__': main()
