@@ -42,9 +42,10 @@ else:
     fp = open(json_filename, "r")
     tagged_dict = json.load(fp)
     fp.close()
-    frames_tagged = set(tagged_dict.keys())
+    frames_tagged = set(map(int, tagged_dict.keys()))
     print("{} already exists with {} frames tagged.  Appending to file.".format(
                 json_filename, len(frames_tagged)))
+    print(frames_tagged)
 
 tag.print_tagging_instructions()
 
@@ -114,6 +115,9 @@ try:
                 if not ret:
                     print("Could not read frame.")
                     break
+                if next_frameId in frames_tagged:
+                    print("A record for frame {} already exists.".format(next_frameId))
+                    break
                 ret, boxes = multiTracker.update(next_image)
 
                 # draw tracked objects
@@ -141,6 +145,7 @@ try:
                         json.dump(tagged_dict, fp)
                     fp.close()
                     records_count += 1
+                    num_tagged += 1
                 else:
                     cv2.destroyWindow('MultiTracker')
                     cv2.waitKey(100)
