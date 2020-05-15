@@ -13,6 +13,7 @@ parser.add_argument('--records', default=20, help='Number of frames to tag.',
                         type=int)
 parser.add_argument('--duration', help='Duration of the video in minutes.',
                         required=True, type=float)
+parser.add_argument('--start', default=0, type=float, help='Minute mark to start tagging.')
 
 args = parser.parse_args()
 
@@ -52,8 +53,12 @@ tag.print_tagging_instructions()
 #Make frames to tag list
 cap = cv2.VideoCapture(videoFile)
 frameRate = cap.get(5) #frame rate
+start_frame = args.start*60.*frameRate
 try:
-    frame_set = set(sample(range(int(video_duration*frameRate)), num_records))
+    frame_set = set(sample(range(int(start_frame),
+                                 int(start_frame + video_duration*frameRate)),
+                                 num_records))
+    print("frame_set: ", frame_set)
 except ValueError:
     print("Sample larger than population or is negative - \
             Choose a different number of frames to tag.")
