@@ -53,10 +53,11 @@ tag.print_tagging_instructions()
 #Make frames to tag list
 cap = cv2.VideoCapture(videoFile)
 frameRate = cap.get(5) #frame rate
+print("framerate:", frameRate)
 start_frame = args.start*60.*frameRate
 try:
     frame_set = set(sample(range(int(start_frame),
-                                 int(start_frame + video_duration*frameRate)),
+                                 int(video_duration*frameRate)),
                                  num_records))
     print("frame_set: ", frame_set)
 except ValueError:
