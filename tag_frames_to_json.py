@@ -122,6 +122,8 @@ try:
                     break
                 if next_frameId in frames_tagged:
                     print("A record for frame {} already exists.".format(next_frameId))
+                    cv2.destroyWindow('MultiTracker')
+                    cv2.waitKey(100)
                     break
                 ret, boxes = multiTracker.update(next_image)
 
