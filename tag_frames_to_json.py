@@ -150,7 +150,7 @@ try:
                         json.dump(tagged_dict, fp)
                     fp.close()
                     records_count += 1
-                    num_tagged += 1
+
                 else:
                     cv2.destroyWindow('MultiTracker')
                     cv2.waitKey(100)
@@ -165,4 +165,4 @@ cv2.destroyAllWindows()
 cv2.waitKey(10)
 
 
-tag.print_summary(num_tagged, json_filename)
+tag.print_summary(records_count, json_filename)
