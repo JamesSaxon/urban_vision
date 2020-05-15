@@ -79,6 +79,9 @@ try:
 
             #Write output_dict to file
             tagged_dict[frameId] = output_dict
+            with open(json_filename, 'w') as fp:
+                json.dump(tagged_dict, fp)
+            fp.close()
 
             records_count += 1
             num_tagged += 1
@@ -134,6 +137,9 @@ try:
                                                         next_frameId)
                     #Write output_dict to file
                     tagged_dict[next_frameId] = next_output_dict
+                    with open(json_filename, 'w') as fp:
+                        json.dump(tagged_dict, fp)
+                    fp.close()
                     records_count += 1
                 else:
                     cv2.destroyWindow('MultiTracker')
@@ -148,9 +154,5 @@ cv2.waitKey(10)
 cv2.destroyAllWindows()
 cv2.waitKey(10)
 
-#Write out to json.
-with open(json_filename, 'w') as fp:
-    json.dump(tagged_dict, fp)
-fp.close()
 
 tag.print_summary(num_tagged, json_filename)
