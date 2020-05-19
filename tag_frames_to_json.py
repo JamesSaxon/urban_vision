@@ -54,7 +54,11 @@ tag.print_tagging_instructions()
 cap = cv2.VideoCapture(videoFile)
 frameRate = cap.get(5) #frame rate
 print("framerate:", frameRate)
+
 start_frame = args.start*60.*frameRate
+if args.start > args.duration:
+    start_frame = args.start
+
 try:
     frame_set = set(sample(range(int(start_frame),
                                  int(video_duration*frameRate)),
@@ -138,6 +142,7 @@ try:
                 cv2.namedWindow("MultiTracker")
                 cv2.startWindowThread()
                 cv2.imshow('MultiTracker', clone)
+                cv2.moveWindow("MultiTracker", -305, -1000)
                 cv2.waitKey(100)
                 print("Press y to accept this tagged frame.")
                 print("Press any other key to quit without accepting.")

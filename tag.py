@@ -22,10 +22,12 @@ def tag_objects(frameId, image, videoFile):
     clone = image.copy()
     cv2.namedWindow("image")
     cv2.startWindowThread()
+    cv2.namedWindow("image")
 
     while True:
         # display the image and allow bounding box selection
         cv2.imshow("image", image)
+        cv2.moveWindow("image", -305, -1000)
         ROI = cv2.selectROI("image", image, showCrosshair=False)
         cv2.destroyWindow("ROI selector")
         cv2.waitKey(100)
