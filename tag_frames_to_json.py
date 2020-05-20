@@ -87,82 +87,83 @@ try:
                         frameId, num_tagged + 1, num_records))
 
             output_dict = tag.tag_objects(frameId, image, videoFile)
+            if output_dict:
 
-            #Write output_dict to file
-            tagged_dict[frameId] = output_dict
-            with open(json_filename, 'w') as fp:
-                json.dump(tagged_dict, fp)
-            fp.close()
+                #Write output_dict to file
+                tagged_dict[frameId] = output_dict
+                with open(json_filename, 'w') as fp:
+                    json.dump(tagged_dict, fp)
+                fp.close()
 
-            records_count += 1
-            num_tagged += 1
-            frames_tagged.add(frameId)
+                records_count += 1
+                num_tagged += 1
+                frames_tagged.add(frameId)
 
-            #Set tracker bboxes as list of tagged objects
-            bboxes = []
-            colors = []
-            for i in range(len(output_dict['classes'])):
-                bboxes.append((output_dict['xmins'][i],
-                               output_dict['ymins'][i],
-                               output_dict['xmaxs'][i] - output_dict['xmins'][i],
-                               output_dict['ymaxs'][i] - output_dict['ymins'][i]))
-                colors.append((randint(0, 255), randint(0, 255), randint(0, 255)))
+                #Set tracker bboxes as list of tagged objects
+                bboxes = []
+                colors = []
+                for i in range(len(output_dict['classes'])):
+                    bboxes.append((output_dict['xmins'][i],
+                                   output_dict['ymins'][i],
+                                   output_dict['xmaxs'][i] - output_dict['xmins'][i],
+                                   output_dict['ymaxs'][i] - output_dict['ymins'][i]))
+                    colors.append((randint(0, 255), randint(0, 255), randint(0, 255)))
 
-            #Create new multitracker object
-            multiTracker = cv2.MultiTracker_create()
+                #Create new multitracker object
+                multiTracker = cv2.MultiTracker_create()
 
-            #Add bboxes to tracker object
-            for bbox in bboxes:
-                multiTracker.add(tag.createTrackerByName(trackerType), image, bbox)
+                #Add bboxes to tracker object
+                for bbox in bboxes:
+                    multiTracker.add(tag.createTrackerByName(trackerType), image, bbox)
 
-            #Read next frame and update multitracker object
-            #Display bboxes (on cloned image) and ask user if they accept the
-            #frame or not.  If not quit
-            while True:
-                next_frameId = int(cap.get(1))
-                ret, next_image = cap.read()
-                clone = next_image.copy()
-                if not ret:
-                    print("Could not read frame.")
-                    break
-                if next_frameId in frames_tagged:
-                    print("A record for frame {} already exists.".format(next_frameId))
-                    cv2.destroyWindow('MultiTracker')
+                #Read next frame and update multitracker object
+                #Display bboxes (on cloned image) and ask user if they accept the
+                #frame or not.  If not quit
+                while True:
+                    next_frameId = int(cap.get(1))
+                    ret, next_image = cap.read()
+                    clone = next_image.copy()
+                    if not ret:
+                        print("Could not read frame.")
+                        break
+                    if next_frameId in frames_tagged:
+                        print("A record for frame {} already exists.".format(next_frameId))
+                        cv2.destroyWindow('MultiTracker')
+                        cv2.waitKey(100)
+                        break
+                    ret, boxes = multiTracker.update(next_image)
+
+                    # draw tracked objects
+                    for i, newbox in enumerate(boxes):
+                        p1 = (int(newbox[0]), int(newbox[1]))
+                        p2 = (int(newbox[0] + newbox[2]), int(newbox[1] + newbox[3]))
+                        cv2.rectangle(clone, p1, p2, colors[i], 2, 1)
+
+                    # show frame
+                    cv2.namedWindow("MultiTracker")
+                    cv2.startWindowThread()
+                    cv2.imshow('MultiTracker', clone)
+                    #cv2.moveWindow("MultiTracker", -305, -1000)
                     cv2.waitKey(100)
-                    break
-                ret, boxes = multiTracker.update(next_image)
+                    print("Press y to accept this tagged frame.")
+                    print("Press x to quit without accepting.")
+                    k = cv2.waitKey(0) & 0xFF
+                    if (k == 121):  # y is pressed
+                        next_output_dict = tag.update_tracked(output_dict,
+                                                              boxes,
+                                                              next_image,
+                                                              next_frameId)
+                        #Write output_dict to file
+                        tagged_dict[next_frameId] = next_output_dict
+                        with open(json_filename, 'w') as fp:
+                            json.dump(tagged_dict, fp)
+                        fp.close()
+                        records_count += 1
 
-                # draw tracked objects
-                for i, newbox in enumerate(boxes):
-                    p1 = (int(newbox[0]), int(newbox[1]))
-                    p2 = (int(newbox[0] + newbox[2]), int(newbox[1] + newbox[3]))
-                    cv2.rectangle(clone, p1, p2, colors[i], 2, 1)
-
-                # show frame
-                cv2.namedWindow("MultiTracker")
-                cv2.startWindowThread()
-                cv2.imshow('MultiTracker', clone)
-                cv2.moveWindow("MultiTracker", -305, -1000)
-                cv2.waitKey(100)
-                print("Press y to accept this tagged frame.")
-                print("Press any other key to quit without accepting.")
-                k = cv2.waitKey(0) & 0xFF
-                if (k == 121):  # y is pressed
-                    next_output_dict = tag.update_tracked(output_dict,
-                                                        boxes,
-                                                        next_image,
-                                                        next_frameId)
-                    #Write output_dict to file
-                    tagged_dict[next_frameId] = next_output_dict
-                    with open(json_filename, 'w') as fp:
-                        json.dump(tagged_dict, fp)
-                    fp.close()
-                    records_count += 1
-
-                else:
-                    cv2.destroyWindow('MultiTracker')
-                    cv2.waitKey(100)
-                    break
+                    elif k == ord('x'):
+                        cv2.destroyWindow('MultiTracker')
+                        cv2.waitKey(100)
+                        break
 except KeyboardInterrupt:
     print("Tagging interrupted.  Writing out {} records instead of {}.".format(
                     num_tagged, num_records))

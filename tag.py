@@ -27,7 +27,7 @@ def tag_objects(frameId, image, videoFile):
     while True:
         # display the image and allow bounding box selection
         cv2.imshow("image", image)
-        cv2.moveWindow("image", -305, -1000)
+        #cv2.moveWindow("image", -305, -1000)
         ROI = cv2.selectROI("image", image, showCrosshair=False)
         cv2.destroyWindow("ROI selector")
         cv2.waitKey(100)
@@ -42,29 +42,45 @@ def tag_objects(frameId, image, videoFile):
             image = clone.copy()
 
         # if the 'p' key is pressed, save coordinates, 'person', and draw rectangle in green.
-        if key == ord("p"):
+        if key == ord("p") or key == ord("P"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 0), 1)
             update_dict_coords(output_dict, 1, 'person', corner1, corner2)
             cv2.imshow('image', image)
+            if key == ord("P"): break
             clone = image.copy()
 
         # if the 'b' key is pressed, save coordinates, 'bus', and draw rectangle in red.
-        if key == ord("b"):
+        if key == ord("b") or key == ord("B"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 0, 255), 1)
             update_dict_coords(output_dict, 3, 'bus', corner1, corner2)
             cv2.imshow('image', image)
+            if key == ord("B"): break
             clone = image.copy()
 
         # if the 'c' key is pressed, save coordinates, 'car', and draw rectangle in yellow.
-        if key == ord("c"):
+        if key == ord("c") or key == ord("C"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 255), 1)
             update_dict_coords(output_dict, 2, 'car', corner1, corner2)
             cv2.imshow('image', image)
+            if key == ord("C"): break
             clone = image.copy()
 
+        # if the 't' key is pressed, save coordinates, 'truck', and draw rectangle in magenta.
+        if key == ord("t") or key == ord("T"):
+            image = clone.copy()
+            cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (255, 0, 255), 1)
+            update_dict_coords(output_dict, 4, 'truck', corner1, corner2)
+            cv2.imshow('image', image)
+            if key == ord("T"): break
+            clone = image.copy()
+
+        # If the 's' key is pressed, break from the loop and return an empty dictionary.
+        elif key == ord("s"):
+            output_dict = {}
+            break
         # if the 'q' key is pressed, break from the loop
         elif key == ord("q"):
             break
@@ -187,10 +203,11 @@ def print_tagging_instructions():
     print('2. Press "enter" to accept bounding box.  Press "c" to redo.')
     print('Bounding box should turn white when accepted.')
     print("3.  Once the bounding box is white, press 'p' for person, 'c' for car,")
-    print("'b' for bus, 'r' to redo, and 'q' to quit the frame.")
-    print("4.  If you tagged a person, car, or bus, the bounding box should change color.")
+    print("'b' for bus, 't' for truck, 'r' to redo, 'q' to quit the frame, and")
+    print("'s' to skip the frame without saving a record.")
+    print("4.  If you tagged a person, car, truck, or bus, the bounding box should change color.")
     print("5.  To quit before the number of frames specified has been tagged, press Ctrl-C.")
-    print("6.  Tag every object (person, car, or bus) in the frame")
+    print("6.  Tag every object (person, car, truck or bus) in the frame")
     print("7.  Make sure bounding box covers only the visible parts of the object.")
     print("8.  Don't tag objects that are mostly hidden.")
     print("*******************************************************************")
