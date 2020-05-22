@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 import os, glob, time
+from random import sample
 
 
 def tag_objects(frameId, image, videoFile):
@@ -14,7 +15,9 @@ def tag_objects(frameId, image, videoFile):
         output_dict - dictionary of features which can then be serialized to a
                       tf_example object
     '''
-    output_dict = {'video': str(videoFile), 'source_id': str(frameId), 'image_width':None, 'image_height':None,
+    videoFile_pathless = videoFile.split("/")[-1]
+    output_dict = {'video': str(videoFile_pathless), 'source_id': str(frameId),
+                   'image_width':None, 'image_height':None,
                     'xmins':[], 'xmaxs':[], 'ymins':[], 'ymaxs':[], 'classes':[],
                     'classes_text':[]}
     output_dict['image_height']=image.shape[0]
@@ -220,3 +223,20 @@ def print_summary(count, output_path):
     print("Summary:")
     print("You tagged {} frames.".format(count))
     print("*******************************************************************")
+
+def sample_bins(frames_tagged, num_records, num_bins, frame_lim_low, frame_lim_high):
+    #Create bins
+    bins = []
+    frame_set = set()
+    width = (frame_lim_high + 1 - frame_lim_low)/num_bins
+    divs = np.linspace(frame_lim_low, frame_lim_high + 1, num_bins + 1)
+    for i in range(num_bins):
+        bins.append([x for x in range(int(divs[i]), int(divs[i+1]))])
+    #Count number of frames in each bin.
+    end_frames_per_bin = int((len(frames_tagged) + 5*num_records)/num_bins)
+    for bin in bins:
+        n_bin = int((end_frames_per_bin - len(set(bin).intersection(frames_tagged)))/5)
+        n_bin = n_bin if n_bin>0 else 1
+        frames_bin = set(sample(range(bin[0],bin[-1]),n_bin))
+        frame_set = frame_set.union(frames_bin)
+    return frame_set

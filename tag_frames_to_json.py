@@ -15,9 +15,11 @@ parser.add_argument('--duration', help='Duration of the video in minutes.',
                         required=True, type=float)
 parser.add_argument('--start', default=0, type=float, help='Minute mark to start tagging.')
 
+
 args = parser.parse_args()
 
 videoFile = args.video
+videoFile_pathless = videoFile.split("/")[-1]
 num_records = args.records
 video_duration = args.duration*60.
 
@@ -25,7 +27,7 @@ video_duration = args.duration*60.
 trackerType = "CSRT"
 
 
-stem = videoFile.split(".")[0]
+stem = videoFile_pathless.split(".")[0]
 json_filename = stem + "_records.json"
 
 #Add code to read in frames from csv.
@@ -59,6 +61,9 @@ start_frame = args.start*60.*frameRate
 if args.start > args.duration:
     start_frame = args.start
 
+frame_set = tag.sample_bins(frames_tagged, num_records, 10, start_frame, int(video_duration*frameRate))
+print("frame_set: ", frame_set)
+'''
 try:
     frame_set = set(sample(range(int(start_frame),
                                  int(video_duration*frameRate)),
@@ -67,6 +72,7 @@ try:
 except ValueError:
     print("Sample larger than population or is negative - \
             Choose a different number of frames to tag.")
+'''
 
 records_count = 0
 num_tagged = 0
@@ -86,7 +92,7 @@ try:
             print("Frame number {}.  This is record {} out of {}.".format(
                         frameId, num_tagged + 1, num_records))
 
-            output_dict = tag.tag_objects(frameId, image, videoFile)
+            output_dict = tag.tag_objects(frameId, image, videoFile_pathless)
             if output_dict:
 
                 #Write output_dict to file
@@ -164,6 +170,13 @@ try:
                         cv2.destroyWindow('MultiTracker')
                         cv2.waitKey(100)
                         break
+
+                    elif k == ord('r'):
+                        frame_set.add(next_frameId + 1)
+                        cv2.destroyWindow('MultiTracker')
+                        cv2.waitKey(100)
+                        break
+
 except KeyboardInterrupt:
     print("Tagging interrupted.  Writing out {} records instead of {}.".format(
                     num_tagged, num_records))
