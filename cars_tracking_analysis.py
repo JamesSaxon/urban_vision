@@ -46,10 +46,12 @@ def main():
 
     s_avg = []
     for o in objects_df.index:
+
         if objects_df.loc[o, 'direction']=='S':
             s_avg.append(np.nan)
             continue
         df_mini = df[df['o']==o][['y', 't']]
+        df_mini.dropna(inplace=True)
         y1 = None
         t1 = None
         for _, row in df_mini.iterrows():
@@ -62,7 +64,8 @@ def main():
                 break
             y1 = y
             t1 = t
-        s_avg.append(2.237*dist*frame_rate/(tf - ti))
+        s = 2.237*dist*frame_rate/(tf - ti)
+        s_avg.append(s if s>0 else np.nan)
     objects_df['s_avg'] = s_avg
     print("Average speed for cars traveling north is: {:.2f} miles per hour.".format(objects_df.s_avg.mean()))
 
