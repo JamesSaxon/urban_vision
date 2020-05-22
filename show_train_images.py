@@ -44,7 +44,7 @@ for example in parsed_dataset:
                    1, (255,255,0), 2)
     title = 'Frame ' + example['image/source_id'].numpy().decode("utf-8")
     cv2.putText(image, title, (int(image_width*0.4), image_height - 10), cv2.FONT_HERSHEY_SIMPLEX,
-               3, (255,0,255), 4)
+               2, (255,0,255), 3)
     cv2.imshow("image", image)
     cv2.waitKey(0)
     cv2.waitKey(10)
@@ -54,6 +54,11 @@ for example in parsed_dataset:
         print("Limit reached.  {} frames shown.".format(limit))
         print('\n')
         break
+
+if not args.limit:
+    print('\n')
+    print("End of file.  {} frames shown.".format(ct))
+    print('\n')
 
 cv2.destroyAllWindows()
 cv2.waitKey(10)
