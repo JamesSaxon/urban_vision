@@ -250,6 +250,16 @@ class Tracker():
 
         return locations
 
+
+    def edge_veto(self, box):
+
+        if box["xmin"] < self.roi["xmin"] + self.roi_buffer: return True
+        if box["xmax"] > self.roi["xmax"] - self.roi_buffer: return True
+        if box["ymin"] < self.roi["ymin"] + self.roi_buffer: return True
+        if box["ymax"] > self.roi["ymax"] - self.roi_buffer: return True
+
+        return False
+
     def deactivate_objects(self):
 
         for o in self.objects.values():
@@ -264,7 +274,7 @@ class Tracker():
                 o.deactivate()
 
 
-    def update(self, new_points, areas = None, confs = None, ts = None, colors = None):
+    def update(self, new_points, boxes, areas = None, confs = None, ts = None, colors = None):
 
         self.t += 1
 
@@ -281,11 +291,13 @@ class Tracker():
         if not self.n_active:
             for idx, pt in enumerate(new_points):
 
+                if self.edge_veto(boxes[idx]): continue
+
                 oidx = self.new_object()
                 self.objects[oidx].set_color(colors[idx])
 
-                a  = None if areas is None else areas[idx]
-                c  = None if confs is None else confs[idx]
+                a = None if areas is None else areas[idx]
+                c = None if confs is None else confs[idx]
 
                 self.objects[oidx].update(pt[0], pt[1], self.t, a, c, ts)
 
@@ -324,6 +336,9 @@ class Tracker():
             new_idx = idx[1]
 
             new_xy = new_points[new_idx]
+
+            if self.edge_veto(boxes[new_idx]):
+                self.objects[obj_idx].deactivate()
             
             if areas is None:
                 self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, ts = ts)
@@ -349,10 +364,8 @@ class Tracker():
                 if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
 
             x, y = new_points[idx]
-            if x < self.roi["xmin"] + self.roi_buffer: continue 
-            if x > self.roi["xmax"] - self.roi_buffer: continue 
-            if y < self.roi["ymin"] + self.roi_buffer: continue 
-            if y > self.roi["ymax"] - self.roi_buffer: continue 
+
+            if self.edge_veto(boxes[idx]): continue
             
             oidx = self.new_object()
 
@@ -368,14 +381,14 @@ class Tracker():
         self.deactivate_objects()
 
 
-    def draw(self, img, scale = 1):
+    def draw(self, img, min_obs = 5, scale = 1):
 
         depth = self.CONTRAIL
 
         for o in self.objects.values():
 
             if o.last_time < self.t - depth: continue
-            if o.nobs < 5: continue
+            if o.nobs < min_obs: continue
 
             x0, y0, t0 = None, None, None
 
@@ -417,9 +430,14 @@ class Tracker():
 
     def write(self, output):
 
-        df_out = pd.concat([o.df for o in self.objects.values()])
+        if self.oid:
 
-        df_out.to_csv(output, index = False)
+            df_out = pd.concat([o.df for o in self.objects.values()])
+            df_out.to_csv(output, index = False)
+
+        else:
+
+            pd.DataFrame(columns = ["x", "y", "t", "ts", "o", "area", "conf"]).to_csv(output, index = False)
 
     @property
     def n_active(self):

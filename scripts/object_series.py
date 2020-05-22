@@ -38,9 +38,13 @@ def main():
     parser.add_argument("--predict_matches", default = False, action = "store_true")
     parser.add_argument("--max_missing", default = 5, type = int)
     parser.add_argument("--max_distance", default = 0.125, type = float)
+    parser.add_argument("--max_overlap", default = 0.25, type = float)
+    parser.add_argument("--min_obs", default = 5, type = float)
     parser.add_argument("--contrail", default = 0, type = int)
     parser.add_argument("--select_roi", default = False, action = "store_true")
     parser.add_argument("--roi", default = [], type = float, nargs = 4)
+    parser.add_argument("--roi_loc", default = "upper center", type = str)
+    parser.add_argument("--edge_veto", default = 0, type = float)
     parser.add_argument("--view", default = False, action = "store_true")
     parser.add_argument("--scale", default = 1, type = float)
     parser.add_argument("--verbose", default = False, action = "store_true")
@@ -62,7 +66,9 @@ def main():
 
     detector = det.Detector(model = args.model, labels = args.labels, 
                             categs = args.categs, thresh = args.thresh, k = args.k, 
-                            loc = "upper center", verbose = False)
+                            max_overlap = args.max_overlap,
+                            loc = args.roi_loc, edge_veto = args.edge_veto, 
+                            verbose = False)
 
     vid = cv2.VideoCapture(args.input)
 
@@ -118,7 +124,8 @@ def main():
         shade = 2 * np.ones((int(img.shape[0] / args.scale), int(img.shape[1] / args.scale))).astype("uint8")
         shade[int(YMIN/args.scale):int(YMAX/args.scale),int(XMIN/args.scale):int(XMAX/args.scale)] -= 1
 
-        tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX}, roi_buffer = 20)
+        tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
+                        roi_buffer = (YMAX - YMIN) * 0.02)
 
         # Re-set...
         vid = cv2.VideoCapture(args.input)
@@ -144,8 +151,8 @@ def main():
 
         if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
 
-        tracker.update(detections["xy"], detections["areas"], detections["confs"])
-        tracker.draw(scaled, scale = args.scale)
+        tracker.update(detections["xy"], detections["boxes"], detections["areas"], detections["confs"])
+        tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
 
         if args.view:
         
