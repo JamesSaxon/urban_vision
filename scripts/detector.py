@@ -73,7 +73,8 @@ class Detector():
                  labels = "../models/coco_labels.txt",
                  relative_coord = False, keep_aspect_ratio = False,
                  categs = ["person"], thresh = 0.6, k = 1,
-                 loc = "upper center", verbose = False):
+                 max_overlap = 0.5,
+                 loc = "upper center", edge_veto = 0, verbose = False):
 
 
         print("Loading", model, labels)
@@ -86,6 +87,8 @@ class Detector():
 
         self.thresh = thresh
         self.k      = k
+
+        self.max_overlap = max_overlap
 
         self.relative_coord = relative_coord
         self.keep_aspect_ratio = keep_aspect_ratio
@@ -100,6 +103,8 @@ class Detector():
 
         if self.hloc not in ["left", "center", "right"]:
             raise(ValueError, "Horizontal location must be left, center, or right.")
+
+        self.edge_veto = edge_veto
 
         self.verbose = verbose
 
@@ -176,14 +181,17 @@ class Detector():
         if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
         else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
 
+        range_x = roi_xmax - roi_xmin
+        range_y = roi_ymax - roi_ymin
+
         image = Image.fromarray(cv2.cvtColor(frame[roi_ymin:roi_ymax, roi_xmin:roi_xmax], cv2.COLOR_BGR2RGB))
 
         raw_detections = self.engine.detect_with_image(image, threshold = self.thresh,
                                             keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
 
-        duplicates = flag_duplicates(raw_detections, labels = self.ncategs)
+        duplicates = flag_duplicates(raw_detections, labels = self.ncategs, max_overlap = self.max_overlap)
 
-        XY, AREAS, CONFS = [], [], []
+        XY, BOXES, AREAS, CONFS = [], [], [], []
 
         for iobj, obj in enumerate(raw_detections):
 
@@ -195,6 +203,14 @@ class Detector():
                 label = self.labels[obj.label_id]
 
             box = obj.bounding_box.flatten()
+
+            if self.edge_veto > 0:
+                if box[0] / range_x < self.edge_veto:     continue
+                if box[2] / range_x > 1 - self.edge_veto: continue
+                if box[1] / range_y < self.edge_veto:     continue
+                if box[3] / range_y > 1 - self.edge_veto: continue
+
+
             box[0] += roi_xmin
             box[2] += roi_xmin
             box[1] += roi_ymin
@@ -225,11 +241,14 @@ class Detector():
             if self.vloc == "lower":  y = box_ymax
 
             XY.append((x,y))
+            BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
+                          "ymin" : box_ymin, "ymax" : box_ymax})
+
             AREAS.append((box[2]-box[0])*(box[3]-box[1]))
             CONFS.append(obj.score)
 
 
-        retval = {"xy" : XY, "areas" : AREAS, "confs" : CONFS}
+        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS}
         if return_image: retval["image"] = frame
 
         return retval
