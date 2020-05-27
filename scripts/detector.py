@@ -55,9 +55,9 @@ def flag_duplicates(raw_detections, max_overlap = 0.25, labels = None):
             if i_label != j_label: continue
 
             intx_frac = max_fractional_intersection(iobj, jobj)
-            
+
             if intx_frac > max_overlap:
-                
+
                 duplicates.append(io if iobj.score < jobj.score else jo)
 
     return duplicates
@@ -144,7 +144,7 @@ class Detector():
     ##          box = obj.bounding_box.flatten()
     ##          xmin, ymin, xmax, ymax = box
 
-    ##          if return_image: 
+    ##          if return_image:
 
     ##              if is_duplicate: color = tuple([int((c + 255)/2) for c in color])
     ##              width = 2 if is_duplicate else 4
@@ -219,7 +219,7 @@ class Detector():
 
             is_duplicate = iobj in duplicates
 
-            if return_image: 
+            if return_image:
 
                 color = Detector.colors[self.categs.index(label)] if len(self.categs) else (255, 255, 255)
 
@@ -254,6 +254,90 @@ class Detector():
         return retval
 
 
+    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, return_image = True):
+
+        if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
+        else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
+
+        #ROI list from grid.
+        xvals = np.linspace(roi_xmin, roi_xmax, xgrid+1)
+        yvals = np.linspace(roi_ymin, roi_ymax, ygrid+1)
+        subroi_list = []
+        for i in range(xgrid):
+            for j in range(ygrid):
+                subroi_list.append([int(xvals[i]),
+                                    int(xvals[i+1]),
+                                    int(yvals[j]),
+                                    int(yvals[j+1])])
+
+        XY, BOXES, AREAS, CONFS = [], [], [], []
+        for subroi in subroi_list:
+            subroi_xmin, subroi_xmax, subroi_ymin, subroi_ymax = subroi
+            subimage = Image.fromarray(cv2.cvtColor(frame[subroi_ymin:subroi_ymax,
+                                                       subroi_xmin:subroi_xmax],
+                                                       cv2.COLOR_BGR2RGB))
+            raw_detections = self.engine.detect_with_image(subimage, threshold = self.thresh,
+                                                keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
+
+            duplicates = flag_duplicates(raw_detections, labels = self.ncategs, max_overlap = self.max_overlap)
+            for iobj, obj in enumerate(raw_detections):
+
+                # If the label is irrelevant, just get out.
+                label = None
+                if self.labels is not None and len(self.categs):
+
+                    if obj.label_id not in self.ncategs: continue
+                    label = self.labels[obj.label_id]
+
+                box = obj.bounding_box.flatten()
+
+                if self.edge_veto > 0:
+                    if box[0] / range_x < self.edge_veto:     continue
+                    if box[2] / range_x > 1 - self.edge_veto: continue
+                    if box[1] / range_y < self.edge_veto:     continue
+                    if box[3] / range_y > 1 - self.edge_veto: continue
+
+
+                box[0] += subroi_xmin
+                box[2] += subroi_xmin
+                box[1] += subroi_ymin
+                box[3] += subroi_ymin
+                draw_box = box.astype(int)
+
+                is_duplicate = iobj in duplicates
+
+                if return_image:
+
+                    color = Detector.colors[self.categs.index(label)] if len(self.categs) else (255, 255, 255)
+
+                    if is_duplicate: color = tuple([int((c + 255)/2) for c in color])
+                    width = 2 if is_duplicate else 4
+
+                    cv2.rectangle(frame, tuple(draw_box[:2]), tuple(draw_box[2:]), color, width)
+
+                if is_duplicate: continue
+
+                box_xmin, box_ymin, box_xmax, box_ymax = box
+
+                if self.hloc == "left":   x = box_xmax
+                if self.hloc == "center": x = (box_xmax + box_xmin) / 2
+                if self.hloc == "right":  x = box_xmin
+
+                if self.vloc == "upper":  y = box_ymin
+                if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
+                if self.vloc == "lower":  y = box_ymax
+
+                XY.append((x,y))
+                BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
+                              "ymin" : box_ymin, "ymax" : box_ymax})
+
+                AREAS.append((box[2]-box[0])*(box[3]-box[1]))
+                CONFS.append(obj.score)
+
+        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS}
+        if return_image: retval["image"] = frame
+
+        return retval
 
     def detect_objects(self, frame, scale=4, kernel=60//4, panels=False,
                         box_size=300, top_k=3, view=False, gauss=True,
