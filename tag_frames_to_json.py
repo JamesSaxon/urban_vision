@@ -14,6 +14,7 @@ parser.add_argument('--records', default=20, help='Number of frames to tag.',
 parser.add_argument('--duration', help='Duration of the video in minutes.',
                         required=True, type=float)
 parser.add_argument('--start', default=0, type=float, help='Minute mark to start tagging.')
+parser.add_argument('--file', help='CSV file that lists objects and letters for tagging')
 
 
 args = parser.parse_args()
@@ -29,6 +30,13 @@ trackerType = "CSRT"
 
 stem = videoFile_pathless.split(".")[0]
 json_filename = stem + "_records.json"
+
+with open(args.file, 'r') as read_obj:
+    # pass the file object to reader() to get the reader object
+    csv_reader = csv.reader(read_obj)
+    # Get all rows of csv from csv_reader object as list of tuples
+    label_list = list(map(tuple, csv_reader))
+    # display all rows of csv
 
 #Add code to read in frames from csv.
 
@@ -50,7 +58,7 @@ else:
                 json_filename, len(frames_tagged)))
     print(frames_tagged)
 
-tag.print_tagging_instructions()
+tag.print_tagging_instructions(label_list)
 
 #Make frames to tag list
 cap = cv2.VideoCapture(videoFile)
@@ -92,7 +100,7 @@ try:
             print("Frame number {}.  This is record {} out of {}.".format(
                         frameId, num_tagged + 1, num_records))
 
-            output_dict = tag.tag_objects(frameId, image, videoFile_pathless)
+            output_dict = tag.tag_objects(frameId, image, videoFile_pathless, label_list)
             if output_dict:
 
                 #Write output_dict to file
