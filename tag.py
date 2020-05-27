@@ -61,8 +61,12 @@ def tag_objects(frameId, image, videoFile, label_list):
 
         for i, (label, letter) in enumerate(label_list):
             if key == ord(letter.lower()) or key == ord(letter.upper()):
+                if i >= len(label_colors):
+                    color = (255,255,0)
+                else:
+                    color = label_colors[i+1]
                 image = clone.copy()
-                cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), label_colors[i+1], 1)
+                cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), color, 1)
                 update_dict_coords(output_dict, i+1, label, corner1, corner2)
                 cv2.imshow('image', image)
                 if key == ord(letter.upper()):
@@ -76,7 +80,6 @@ def tag_objects(frameId, image, videoFile, label_list):
     # close all open windows
     cv2.destroyAllWindows()
     cv2.waitKey(10)
-    print(output_dict)
     return output_dict
 
 
