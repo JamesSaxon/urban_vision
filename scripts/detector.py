@@ -254,7 +254,7 @@ class Detector():
         return retval
 
 
-    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, return_image = True):
+    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, return_image = True, overlap = 0.1):
 
         if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
         else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
@@ -265,13 +265,35 @@ class Detector():
         #ROI list from grid.
         xvals = np.linspace(roi_xmin, roi_xmax, xgrid+1)
         yvals = np.linspace(roi_ymin, roi_ymax, ygrid+1)
+
+        #Set number of overlap pixels
+        if xgrid != 1:
+            xoverlap = int(overlap*(roi_xmax-roi_xmin)/xgrid)
+        else: xoverlap = 0
+        if ygrid != 1:
+            yoverlap = int(overlap*(roi_ymax-roi_ymin)/ygrid)
+        else: yoverlap = 0
+
         subroi_list = []
         for i in range(xgrid):
             for j in range(ygrid):
-                subroi_list.append([int(xvals[i]),
-                                    int(xvals[i+1]),
-                                    int(yvals[j]),
-                                    int(yvals[j+1])])
+                xmax = int(xvals[i+1])
+                ymax = int(yvals[j+1])
+                if i == 0:
+                    xmin = int(xvals[i])
+                else:
+                    xmin = int(xvals[i] - xoverlap)
+                if j == 0:
+                    ymin = int(yvals[j])
+                else:
+                    ymin = int(yvals[j] - yoverlap)
+
+                subroi_list.append([xmin,
+                                    xmax,
+                                    ymin,
+                                    ymax])
+
+
 
         XY, BOXES, AREAS, CONFS = [], [], [], []
         for subroi in subroi_list:
