@@ -259,6 +259,9 @@ class Detector():
         if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
         else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
 
+        range_x = roi_xmax - roi_xmin
+        range_y = roi_ymax - roi_ymin
+
         #ROI list from grid.
         xvals = np.linspace(roi_xmin, roi_xmax, xgrid+1)
         yvals = np.linspace(roi_ymin, roi_ymax, ygrid+1)
