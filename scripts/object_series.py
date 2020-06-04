@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+     #!/usr/bin/env python
 
 import argparse
 import platform
@@ -52,6 +52,7 @@ def main():
     parser.add_argument("--verbose", default = False, action = "store_true")
     parser.add_argument("--no_output", default = False, action = "store_true")
     parser.add_argument("--kalman", default = 50, type = int, help = "Scale of Kalman error covariance in pixels.")
+    parser.add_argument("--no_tracker", default = False, action = "store_true")
 
     parser.add_argument('--keep_aspect_ratio', default = False, dest='keep_aspect_ratio', action='store_true',)
 
@@ -60,11 +61,12 @@ def main():
     # Initialize engine.
     vid = cv2.VideoCapture(args.input)
 
-    tracker = tr.Tracker(max_missing = args.max_missing,
-                         max_distance = args.max_distance,
-                         predict_match_locations = args.predict_matches,
-                         kalman_cov = args.kalman,
-                         contrail = args.contrail)
+    if not args.no_tracker:
+        tracker = tr.Tracker(max_missing = args.max_missing,
+                             max_distance = args.max_distance,
+                             predict_match_locations = args.predict_matches,
+                             kalman_cov = args.kalman,
+                             contrail = args.contrail)
 
     detector = det.Detector(model = args.model, labels = args.labels,
                             categs = args.categs, thresh = args.thresh, k = args.k,
@@ -101,7 +103,7 @@ def main():
                                     fx = 1 / args.scale, fy = 1 / args.scale,
                                     interpolation = cv2.INTER_AREA)
             else:
-                scaled = img 
+                scaled = img
 
             ROI = cv2.selectROI(scaled)
             cv2.destroyWindow("ROI selector")
@@ -128,8 +130,9 @@ def main():
         shade = 2 * np.ones((int(img.shape[0] / args.scale), int(img.shape[1] / args.scale))).astype("uint8")
         shade[int(YMIN/args.scale):int(YMAX/args.scale),int(XMIN/args.scale):int(XMAX/args.scale)] -= 1
 
-        tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
-                        roi_buffer = (YMAX - YMIN) * 0.02)
+        if not args.no_tracker:
+            tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
+                             roi_buffer = (YMAX - YMIN) * 0.02)
 
         # Re-set...
         vid = cv2.VideoCapture(args.input)
@@ -147,18 +150,21 @@ def main():
         if not ret: break
         if args.frames and nframe > args.frames: break
 
-        detections = detector.detect_grid(frame, [XMIN, YMIN, XMAX, YMAX],
+        detections, image = detector.detect_grid(frame, [XMIN, YMIN, XMAX, YMAX],
                                           xgrid = args.xgrid, ygrid = args.ygrid,
                                           return_image = True)
 
-        scaled = cv2.resize(detections["image"],
+        if detections:
+            det.write(nframe, detections, args.input.split(".")[0] + "_detector.csv")
+        scaled = cv2.resize(image,
                             None, fx = 1 / args.scale, fy = 1 / args.scale,
                             interpolation = cv2.INTER_AREA)
 
         if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
 
-        tracker.update(detections["xy"], detections["boxes"], detections["areas"], detections["confs"])
-        tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
+        if not args.no_tracker:
+            tracker.update(detections["xy"], detections["boxes"], detections["areas"], detections["confs"])
+            tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
 
         if args.view:
 
@@ -177,7 +183,11 @@ def main():
 
 
     if out is not None: out.release()
-    tracker.write(args.input.split(".")[0] + "_tracker.csv")
+
+    if not args.no_tracker:
+        tracker.write(args.input.split(".")[0] + "_tracker.csv")
+
+
 
 
 if __name__ == '__main__': main()
