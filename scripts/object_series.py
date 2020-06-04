@@ -1,4 +1,4 @@
-     #!/usr/bin/env python
+#!/usr/bin/env python
 
 import argparse
 import platform
@@ -163,7 +163,7 @@ def main():
         if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
 
         if not args.no_tracker:
-            tracker.update(detections["xy"], detections["boxes"], detections["areas"], detections["confs"])
+            tracker.update(detections)
             tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
 
         if args.view:
