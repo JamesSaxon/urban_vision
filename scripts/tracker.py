@@ -253,10 +253,10 @@ class Tracker():
 
     def edge_veto(self, box):
 
-        if box["xmin"] < self.roi["xmin"] + self.roi_buffer: return True
-        if box["xmax"] > self.roi["xmax"] - self.roi_buffer: return True
-        if box["ymin"] < self.roi["ymin"] + self.roi_buffer: return True
-        if box["ymax"] > self.roi["ymax"] - self.roi_buffer: return True
+        if box.xmin < self.roi["xmin"] + self.roi_buffer: return True
+        if box.xmax > self.roi["xmax"] - self.roi_buffer: return True
+        if box.ymin < self.roi["ymin"] + self.roi_buffer: return True
+        if box.ymax > self.roi["ymax"] - self.roi_buffer: return True
 
         return False
 
@@ -274,36 +274,32 @@ class Tracker():
                 o.deactivate()
 
 
-    def update(self, new_points, boxes, areas = None, confs = None, ts = None, colors = None):
+    def update(self, detections, ts = None):
 
         self.t += 1
 
         # If there are no new points, abort.
-        if new_points is None or not len(new_points):
+        if not len(detections):
 
             self.deactivate_objects()
             return
 
-        if type(colors) is not list: colors = [colors for x in new_points]
-
 
         # If there are no existing, active points, add them and abort!
         if not self.n_active:
-            for idx, pt in enumerate(new_points):
+            for idx, det in enumerate(detections):
 
-                if self.edge_veto(boxes[idx]): continue
+                if self.edge_veto(det.box): continue
 
                 oidx = self.new_object()
-                self.objects[oidx].set_color(colors[idx])
+                # self.objects[oidx].set_color(det.color)
 
-                a = None if areas is None else areas[idx]
-                c = None if confs is None else confs[idx]
-
-                self.objects[oidx].update(pt[0], pt[1], self.t, a, c, ts)
+                self.objects[oidx].update(det.x, det.y, self.t, det.area, det.conf, ts)
 
             return
 
-        new_points = np.array(new_points)
+        new_points = np.array([det.xy   for det in detections])
+        new_areas  = np.array([det.area for det in detections])
         new_indexes = set(range(len(new_points)))
 
         if self.predict_match_locations:
@@ -316,10 +312,7 @@ class Tracker():
 
         D = cdist(obj_points, new_points)
 
-        if areas is None:
-            D = np.ma.array(D, mask = D > self.MAX_DISTANCE)
-        else:
-            D = np.ma.array(D, mask = D > self.MAX_DISTANCE * np.sqrt(areas)[np.newaxis,:])
+        D = np.ma.array(D, mask = D > self.MAX_DISTANCE * np.sqrt(new_areas)[np.newaxis,:])
   
         while not D.mask.all():
 
@@ -335,17 +328,13 @@ class Tracker():
             obj_idx = obj_indexes[idx[0]]
             new_idx = idx[1]
 
-            new_xy = new_points[new_idx]
+            # new_xy = detections[new_idx].xy
+            det = detections[new_idx]
 
-            if self.edge_veto(boxes[new_idx]):
+            if self.edge_veto(det.box):
                 self.objects[obj_idx].deactivate()
             
-            if areas is None:
-                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, ts = ts)
-
-            else:
-                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
-                                             areas[new_idx], confs[new_idx], ts = ts)
+            self.objects[obj_idx].update(det.x, det.y, self.t, det.area, det.conf, ts = ts)
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
@@ -357,25 +346,17 @@ class Tracker():
         D.mask = False
         for idx in new_indexes:
 
-            if areas is None:
-                if D[:,idx].min() < self.MAX_DISTANCE: continue
+            if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(new_areas[idx]): continue
 
-            else: 
-                if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
+            # x, y = new_points[idx]
+            det = detections[idx]
 
-            x, y = new_points[idx]
-
-            if self.edge_veto(boxes[idx]): continue
+            if self.edge_veto(det.box): continue
             
             oidx = self.new_object()
 
-            if areas is None:
-                self.objects[oidx].update(x, y, self.t, ts = ts)
-
-            else:
-                self.objects[oidx].update(x, y, self.t, areas[idx], confs[idx], ts = ts)
-
-            self.objects[oidx].set_color(colors[idx])
+            self.objects[oidx].update(det.x, det.y, self.t, det.area, det.conf, ts = ts)
+            # self.objects[oidx].set_color(det.color)
 
 
         self.deactivate_objects()
