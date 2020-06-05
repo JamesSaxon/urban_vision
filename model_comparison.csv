@@ -1,0 +1,4 @@
+Date,Model Name,Training,Validation,Precision,Recall,Loss,Subjective Performance Description
+6/5/2020,hwp_e.tflite,hwp_e xgrid 2,hwp_e xgrid 2,,,,
+,hwp_ef.tflite,hwp_e xgrid 2,hwp_f xgrid 2,,,,
+,hwp_efh.tflite,hwp_ef xgrid 2,hwp_h xgrid 2,,,,
