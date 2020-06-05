@@ -71,14 +71,13 @@ def write(frame_id, det_list, file_name):
     for detection in det_list:
         x.append(detection.xy[0])
         y.append(detection.xy[1])
-        xmin.append(detection.box.xmin)
-        ymin.append(detection.box.ymin)
-        xmax.append(detection.box.xmax)
-        ymax.append(detection.box.ymax)
+        xmin.append(detection.box[0])
+        ymin.append(detection.box[1])
+        xmax.append(detection.box[2])
+        ymax.append(detection.box[3])
         area.append(detection.area)
         label.append(detection.label)
         conf.append(detection.conf)
-
     out_df['x'] = x
     out_df['y'] = y
     out_df['xmin'] = xmin
@@ -90,42 +89,17 @@ def write(frame_id, det_list, file_name):
     out_df['conf'] = conf
     out_df['frame'] = frame_id
 
-    out_df.to_csv(file_name, header=False, mode='a')
+    out_df.to_csv(file_name, header=False, mode='a', index=False)
 
-class BBox():
-
-    def __init__(self, xmin, xmax, ymin, ymax):
-
-        self.xmin = xmin
-        self.xmax = xmax
-        self.ymin = ymin
-        self.ymax = ymax
-
-        self.area = (xmax - xmin) * (ymax - ymin)
 
 class Detection():
 
-    colors = {"person" : (0, 0, 255), "car" : (0, 255, 0), "truck" : (0, 255, 255)}
-
-    def __init__(self, xy, box = None, conf = None, label = None, color = None):
-
-        self.xy    = xy
-        self.x     = xy[0]
-        self.y     = xy[1]
-
-        if box is None: 
-            self.box  = None
-            self.area = None
-        else:
-            self.box = BBox(**box)
-            self.area = self.box.area
-
-        self.conf  = conf
+    def __init__(self, xy, box, conf, label = None):
+        self.xy = xy
         self.label = label
-
-        if   color is not None: self.color = color
-        elif label is not None: self.color = Detection.colors[label]
-        else: self.color = None
+        self.box = box
+        self.conf = conf
+        self.area = (box[2]-box[0])*(box[3]-box[1])
 
 
 
@@ -256,7 +230,7 @@ class Detector():
 
         duplicates = flag_duplicates(raw_detections, labels = self.ncategs, max_overlap = self.max_overlap)
 
-        ## XY, BOXES, AREAS, CONFS, LABELS = [], [], [], [], []
+        XY, BOXES, AREAS, CONFS, LABELS = [], [], [], [], []
 
         det_list = []
 
@@ -308,21 +282,18 @@ class Detector():
             if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
             if self.vloc == "lower":  y = box_ymax
 
-            ## XY.append((x,y))
-            ## LABELS.append(label)
-            ## BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
-            ##               "ymin" : box_ymin, "ymax" : box_ymax})
+            XY.append((x,y))
+            LABELS.append(label)
+            BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
+                          "ymin" : box_ymin, "ymax" : box_ymax})
 
-            ## AREAS.append((box[2]-box[0])*(box[3]-box[1]))
-            ## CONFS.append(obj.score)
+            AREAS.append((box[2]-box[0])*(box[3]-box[1]))
+            CONFS.append(obj.score)
 
-            det_list.append(Detection((x,y), box_dict, obj.score, label))
+            det_list.append(Detection((x,y), box, obj.score, label))
 
-            box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
 
-            det_list.append(Detection((x,y), box_dict, obj.score, label))
-
-        # retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS, "labels": LABELS}
+        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS, "labels": LABELS}
         if return_image: return det_list, frame
 
         return det_list
@@ -332,9 +303,6 @@ class Detector():
 
         if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
         else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
-
-        range_x = roi_xmax - roi_xmin
-        range_y = roi_ymax - roi_ymin
 
         #ROI list from grid.
         xvals = np.linspace(roi_xmin, roi_xmax, xgrid+1)
@@ -367,8 +335,9 @@ class Detector():
                                     ymin,
                                     ymax])
 
-        ## XY, LABELS, BOXES, AREAS, CONFS = [], [], [], [], []
 
+
+        XY, LABELS, BOXES, AREAS, CONFS = [], [], [], [], []
         det_list = []
 
         for subroi in subroi_list:
@@ -427,23 +396,19 @@ class Detector():
                 if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
                 if self.vloc == "lower":  y = box_ymax
 
+                XY.append((x,y))
+                LABELS.append(label)
+                BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
+                              "ymin" : box_ymin, "ymax" : box_ymax})
 
-                ##  XY.append((x,y))
-                ##  LABELS.append(label)
-                ##  BOXES.append(box_dict)
-                ##  AREAS.append((box[2]-box[0])*(box[3]-box[1]))
-                ##  CONFS.append(obj.score)
+                AREAS.append((box[2]-box[0])*(box[3]-box[1]))
+                CONFS.append(obj.score)
+                det_list.append(Detection((x,y), box, obj.score, label))
 
-                box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
-
-                det_list.append(Detection((x,y), box_dict, obj.score, label))
-
-        ## retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS, "labels": LABELS}
-
+        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS, "labels": LABELS}
         if return_image: return det_list, frame
 
         return det_list
-
 
     def detect_objects(self, frame, scale=4, kernel=60//4, panels=False,
                         box_size=300, top_k=3, view=False, gauss=True,
