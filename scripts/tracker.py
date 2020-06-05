@@ -31,6 +31,8 @@ class Object():
         self.ts   = []
         self.missing = 0
 
+        self.box = None
+
         self.current_area = 0
 
         if color is None:
@@ -58,19 +60,31 @@ class Object():
         self.kf_means = [self.xyt[0][0], 0, self.xyt[0][1], 0]
         self.kf_covs  = [0, 0, 0, 0]
 
+    def fillna(self, t):
 
-    def update(self, x, y, t, area = None, conf = None, ts = None):
+        self.xyt.append((np.nan, np.nan, t))
+        self.area.append(None)
+        self.conf.append(None)
+        self.ts.append(None)
+
+
+    def update(self, det, t, ts = None):
 
         # Yay recursion :-)
         if self.xyt and t - 1 != self.last_time:
-            self.update(np.nan, np.nan, t - 1)
+            self.update(None, t - 1)
 
-        self.xyt.append((x, y, t))
-        self.area.append(area)
-        self.conf.append(conf)
-        self.ts.append(ts)
+        if det: 
 
-        self.current_area = area
+            self.xyt.append((det.x, det.y, t))
+            self.area.append(det.area)
+            self.conf.append(det.conf)
+            self.ts.append(ts)
+
+            self.current_area = det.area
+            self.box = det.box
+
+        else: self.fillna(t)
 
         if len(self.xyt) == 1: 
 
@@ -79,13 +93,13 @@ class Object():
 
         else:
             
-            if x is np.nan:
+            if det is None:
 
                 self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, None)
 
             else: 
 
-                self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array([x, y]))
+                self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array(det.xy))
                 self.nobs += 1
 
 
@@ -292,9 +306,8 @@ class Tracker():
                 if self.edge_veto(det.box): continue
 
                 oidx = self.new_object()
-                # self.objects[oidx].set_color(det.color)
 
-                self.objects[oidx].update(det.x, det.y, self.t, det.area, det.conf, ts)
+                self.objects[oidx].update(det, self.t, ts)
 
             return
 
@@ -334,7 +347,7 @@ class Tracker():
             if self.edge_veto(det.box):
                 self.objects[obj_idx].deactivate()
             
-            self.objects[obj_idx].update(det.x, det.y, self.t, det.area, det.conf, ts = ts)
+            self.objects[obj_idx].update(det, self.t, ts = ts)
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
@@ -355,8 +368,7 @@ class Tracker():
             
             oidx = self.new_object()
 
-            self.objects[oidx].update(det.x, det.y, self.t, det.area, det.conf, ts = ts)
-            # self.objects[oidx].set_color(det.color)
+            self.objects[oidx].update(det, self.t, ts = ts)
 
 
         self.deactivate_objects()
