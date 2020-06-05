@@ -9,12 +9,13 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--file', required=True, help='Path of the tfrecord file.')
+parser.add_argument("--select_roi", default = False, action = "store_true")
 parser.add_argument('--ymin', help='Lower y bound (frac)', type = float, default=0.406)
 parser.add_argument('--ymax', help='Upper y bound (frac)', type = float, default=0.95)
 parser.add_argument('--xmin', help='Lower x bound (frac)', type = float, default=0.155)
 parser.add_argument('--xmax', help='Upper x bound (frac)', type = float, default=0.838)
 parser.add_argument('--frac', help='Threshold for the fraction of object to include',
-                    default=0.3, type=float)
+                    default=0.4, type=float)
 parser.add_argument("--xgrid", default = 3, type = int)
 parser.add_argument("--ygrid", default = 1, type = int)
 parser.add_argument("--plim", default = 25, type = int,
@@ -42,8 +43,33 @@ tfrecord_dataset = tf.data.TFRecordDataset([file_path])
 parsed_dataset = tfrecord_dataset.map(train.read_tfrecord)
 
 #ROI list from grid.
-xvals = np.linspace(args.xmin, args.xmax, args.xgrid+1)
-yvals = np.linspace(args.ymin, args.ymax, args.ygrid+1)
+if args.select_roi:
+    for example in parsed_dataset:
+        image_raw = example['image/encoded'].numpy()
+        image_encoded = np.frombuffer(image_raw, np.uint8)
+        img = cv2.imdecode(image_encoded, cv2.IMREAD_COLOR)
+        break
+
+    print("frame size", img.shape[1], img.shape[0])
+
+
+    ROI = cv2.selectROI(img)
+    cv2.destroyWindow("ROI selector")
+
+    XMIN, XMAX = (ROI[0])/img.shape[1], (ROI[0] + ROI[2])/img.shape[1]
+    YMIN, YMAX = (ROI[1])/img.shape[0], (ROI[1] + ROI[3])/img.shape[0]
+
+
+else:
+
+    XMIN = args.xmin
+    XMAX = args.xmax
+    YMIN = args.ymin
+    YMAX = args.ymax
+
+print("ROI: ", XMIN, YMIN, XMAX, YMAX)
+xvals = np.linspace(XMIN, XMAX, args.xgrid+1)
+yvals = np.linspace(YMIN, YMAX, args.ygrid+1)
 roi_list = []
 for i in range(args.xgrid):
     for j in range(args.ygrid):
