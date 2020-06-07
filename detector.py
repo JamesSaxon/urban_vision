@@ -1,5 +1,7 @@
 import cv2, numpy as np
 
+import pandas as pd
+
 from edgetpu.detection.engine import DetectionEngine
 from edgetpu.utils import dataset_utils
 
@@ -61,6 +63,43 @@ def flag_duplicates(raw_detections, max_overlap = 0.25, labels = None):
                 duplicates.append(io if iobj.score < jobj.score else jo)
 
     return duplicates
+
+
+def write(frame_id, det_list, file_name):
+    out_df = pd.DataFrame(columns=['frame', 'x', 'y', 'xmin', 'ymin', 'xmax', 'ymax', 'area', 'label', 'conf'])
+    x, y, xmin, ymin, xmax, ymax, area, label, conf = [], [], [], [], [], [], [], [], []
+    for detection in det_list:
+        x.append(detection.xy[0])
+        y.append(detection.xy[1])
+        xmin.append(detection.box[0])
+        ymin.append(detection.box[1])
+        xmax.append(detection.box[2])
+        ymax.append(detection.box[3])
+        area.append(detection.area)
+        label.append(detection.label)
+        conf.append(detection.conf)
+    out_df['x'] = x
+    out_df['y'] = y
+    out_df['xmin'] = xmin
+    out_df['ymin'] = ymin
+    out_df['xmax'] = xmax
+    out_df['ymax'] = ymax
+    out_df['area'] = area
+    out_df['label'] = label
+    out_df['conf'] = conf
+    out_df['frame'] = frame_id
+
+    out_df.to_csv(file_name, header=False, mode='a', index=False)
+
+
+class Detection():
+
+    def __init__(self, xy, box, conf, label = None):
+        self.xy = xy
+        self.label = label
+        self.box = box
+        self.conf = conf
+        self.area = (box[2]-box[0])*(box[3]-box[1])
 
 
 
@@ -191,7 +230,9 @@ class Detector():
 
         duplicates = flag_duplicates(raw_detections, labels = self.ncategs, max_overlap = self.max_overlap)
 
-        XY, BOXES, AREAS, CONFS = [], [], [], []
+        XY, BOXES, AREAS, CONFS, LABELS = [], [], [], [], []
+
+        det_list = []
 
         for iobj, obj in enumerate(raw_detections):
 
@@ -203,6 +244,7 @@ class Detector():
                 label = self.labels[obj.label_id]
 
             box = obj.bounding_box.flatten()
+            print(box)
 
             if self.edge_veto > 0:
                 if box[0] / range_x < self.edge_veto:     continue
@@ -241,20 +283,23 @@ class Detector():
             if self.vloc == "lower":  y = box_ymax
 
             XY.append((x,y))
+            LABELS.append(label)
             BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
                           "ymin" : box_ymin, "ymax" : box_ymax})
 
             AREAS.append((box[2]-box[0])*(box[3]-box[1]))
             CONFS.append(obj.score)
 
-
-        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS}
-        if return_image: retval["image"] = frame
-
-        return retval
+            det_list.append(Detection((x,y), box, obj.score, label))
 
 
-    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, return_image = True):
+        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS, "labels": LABELS}
+        if return_image: return det_list, frame
+
+        return det_list
+
+
+    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, return_image = True, overlap = 0.1):
 
         if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
         else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
@@ -262,15 +307,39 @@ class Detector():
         #ROI list from grid.
         xvals = np.linspace(roi_xmin, roi_xmax, xgrid+1)
         yvals = np.linspace(roi_ymin, roi_ymax, ygrid+1)
+
+        #Set number of overlap pixels
+        if xgrid != 1:
+            xoverlap = int(overlap*(roi_xmax-roi_xmin)/xgrid)
+        else: xoverlap = 0
+        if ygrid != 1:
+            yoverlap = int(overlap*(roi_ymax-roi_ymin)/ygrid)
+        else: yoverlap = 0
+
         subroi_list = []
         for i in range(xgrid):
             for j in range(ygrid):
-                subroi_list.append([int(xvals[i]),
-                                    int(xvals[i+1]),
-                                    int(yvals[j]),
-                                    int(yvals[j+1])])
+                xmax = int(xvals[i+1])
+                ymax = int(yvals[j+1])
+                if i == 0:
+                    xmin = int(xvals[i])
+                else:
+                    xmin = int(xvals[i] - xoverlap)
+                if j == 0:
+                    ymin = int(yvals[j])
+                else:
+                    ymin = int(yvals[j] - yoverlap)
 
-        XY, BOXES, AREAS, CONFS = [], [], [], []
+                subroi_list.append([xmin,
+                                    xmax,
+                                    ymin,
+                                    ymax])
+
+
+
+        XY, LABELS, BOXES, AREAS, CONFS = [], [], [], [], []
+        det_list = []
+
         for subroi in subroi_list:
             subroi_xmin, subroi_xmax, subroi_ymin, subroi_ymax = subroi
             subimage = Image.fromarray(cv2.cvtColor(frame[subroi_ymin:subroi_ymax,
@@ -328,16 +397,18 @@ class Detector():
                 if self.vloc == "lower":  y = box_ymax
 
                 XY.append((x,y))
+                LABELS.append(label)
                 BOXES.append({"xmin" : box_xmin, "xmax" : box_xmax,
                               "ymin" : box_ymin, "ymax" : box_ymax})
 
                 AREAS.append((box[2]-box[0])*(box[3]-box[1]))
                 CONFS.append(obj.score)
+                det_list.append(Detection((x,y), box, obj.score, label))
 
-        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS}
-        if return_image: retval["image"] = frame
+        retval = {"xy" : XY, "boxes" : BOXES, "areas" : AREAS, "confs" : CONFS, "labels": LABELS}
+        if return_image: return det_list, frame
 
-        return retval
+        return det_list
 
     def detect_objects(self, frame, scale=4, kernel=60//4, panels=False,
                         box_size=300, top_k=3, view=False, gauss=True,

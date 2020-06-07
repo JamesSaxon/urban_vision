@@ -133,8 +133,8 @@ class BBox():
     def draw_rectangle(self, img, scale = 1, color = (255, 255, 255), width = 1):
 
         return cv2.rectangle(img, 
-                             tuple((int(self.xmin / 2), int(self.ymin / 2))),
-                             tuple((int(self.xmax / 2), int(self.ymax / 2))),
+                             tuple((int(self.xmin / scale), int(self.ymin / scale))),
+                             tuple((int(self.xmax / scale), int(self.ymax / scale))),
                              color, width)
 
 
