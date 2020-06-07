@@ -1,7 +1,11 @@
+import sys
+
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
 from collections import deque
+
+from detector import Detection, BBox
 
 import cv2
 
@@ -35,18 +39,19 @@ class Object():
 
         self.current_area = 0
 
-        if color is None:
+        self.last_detection = None
+
+        if color is not None: self.color = color
+        else:
 
             self.color = bgr_colors[self.id % len(bgr_colors)]
 
-        else: 
-        
-            self.color = color
 
         self.nobs = 0
         self.active = True
 
         self.kalman_cov = kalman_cov
+
 
     def make_kalman(self):
 
@@ -76,6 +81,8 @@ class Object():
 
         if det: 
 
+            self.last_detection = t
+
             self.xyt.append((det.x, det.y, t))
             self.area.append(det.area)
             self.conf.append(det.conf)
@@ -103,6 +110,20 @@ class Object():
                 self.nobs += 1
 
 
+    def update_track(self, x, y, t, box, ts = None):
+
+        self.xyt.append((x, y, t))
+        self.ts.append(ts)
+
+        self.box = box
+        self.current_area = box.area
+
+        self.area.append(box.area)
+        self.conf.append(np.nan)
+
+        self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array((x, y)))
+
+
     def set_color(self, c = None):
 
         if c is not None: self.color = c
@@ -114,12 +135,15 @@ class Object():
 
         return self.xyt[-1][2]
 
+
     @property
     def last_location(self):
 
         return self.xyt[-1][:2]
 
     def predict_location(self, t):
+
+        if self.nobs < 4: return self.xyt[-1][:2]
 
         means, covs = self.kf_means, self.kf_covs
 
@@ -189,9 +213,10 @@ class Object():
 
         return df
 
-    def deactivate(self):
+    def deactivate(self, t):
 
         self.active = False
+        self.t_deactive = t
 
 
 
@@ -200,8 +225,9 @@ class Tracker():
     def __init__(self, 
                  max_missing = 4, max_distance = 50, 
                  min_distance_overlap = 0.02,
+                 max_track = 0,
                  predict_match_locations = False,
-                 kalman_cov = 0,
+                 kalman_cov = 0, roi_loc = "upper center",
                  contrail = 0, color = (255, 255, 255)):
 
         self.oid = 0
@@ -219,10 +245,22 @@ class Tracker():
         self.MAX_DISTANCE    = max_distance
         self.MIN_DISTANCE_OR = min_distance_overlap
 
+        self.MAX_TRACK = max_track
+
         self.color = color
 
         self.roi = None
         self.roi_buffer = 0
+
+        loc = roi_loc.split(" ")
+        self.vloc, self.hloc = loc[0], loc[1]
+
+        if self.vloc not in ["upper", "middle", "lower"]:
+            raise(ValueError, "Vertical location must be upper, middle, or lower.")
+
+        if self.hloc not in ["left", "center", "right"]:
+            raise(ValueError, "Horizontal location must be left, center, or right.")
+
 
     def set_roi(self, roi, roi_buffer = 0):
 
@@ -280,15 +318,12 @@ class Tracker():
 
             if not o.active: continue
 
-            if self.t - o.last_time > self.MAX_MISSING:
-                o.deactivate()
-                continue
-
-            if o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer):
-                o.deactivate()
+            if self.t - o.last_detection > self.MAX_MISSING or \
+               o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer):
+                o.deactivate(self.t)
 
 
-    def update(self, detections, ts = None):
+    def update(self, detections, frame = None, ts = None):
 
         self.t += 1
 
@@ -345,7 +380,7 @@ class Tracker():
             det = detections[new_idx]
 
             if self.edge_veto(det.box):
-                self.objects[obj_idx].deactivate()
+                self.objects[obj_idx].deactivate(self.t)
             
             self.objects[obj_idx].update(det, self.t, ts = ts)
 
@@ -359,7 +394,7 @@ class Tracker():
         D.mask = False
         for idx in new_indexes:
 
-            if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(new_areas[idx]): continue
+            if D[:,idx].min() < self.MIN_DISTANCE_OR * np.sqrt(new_areas[idx]): continue
 
             # x, y = new_points[idx]
             det = detections[idx]
@@ -374,13 +409,58 @@ class Tracker():
         self.deactivate_objects()
 
 
+    def reset_track(self, frame = None):
+
+        for tr_idx, oidx in enumerate(self.objects):
+
+            if not self.objects[oidx].active:  continue
+
+            # Only update the tracker if we have a detection.
+            if self.objects[oidx].last_detection != self.t:
+                # If it has been longer than max_track...
+                if self.t - self.objects[oidx].last_detection >= self.MAX_TRACK:
+                    self.objects[oidx].tracker = None 
+                continue
+
+            box = self.objects[oidx].box
+            if box.xmin < 0 or box.ymin < 0: continue
+            if box.xmax > frame.shape[1]:    continue
+            if box.ymax > frame.shape[0]:    continue
+
+            self.objects[oidx].tracker = cv2.TrackerCSRT_create()
+            self.objects[oidx].tracker.init(frame, box.min_and_width())
+
+
+    def track(self, frame, ts = None):
+
+        for oidx, o in self.objects.items():
+
+            # If it was detected this round, get out!
+            if o.last_detection == self.t: continue
+            if o.tracker is None: continue
+
+            ret, new_box = o.tracker.update(frame)
+
+            if not ret:
+                o.tracker = None
+                continue
+
+            new_box = BBox(xmin = new_box[0], ymin = new_box[1], 
+                           xmax = new_box[0] + new_box[2], 
+                           ymax = new_box[1] + new_box[3])
+
+            x, y = new_box.loc(self.hloc, self.vloc)
+
+            self.objects[oidx].update_track(x, y, self.t, new_box, ts = ts)
+
+
     def draw(self, img, min_obs = 5, scale = 1):
 
         depth = self.CONTRAIL
 
         for o in self.objects.values():
 
-            if o.last_time < self.t - depth: continue
+            if o.last_detection < self.t - depth: continue
             if o.nobs < min_obs: continue
 
             x0, y0, t0 = None, None, None
@@ -391,6 +471,8 @@ class Tracker():
 
                 # If not Kalman smoothing, these can be empty.
                 if np.isnan(x1): continue
+
+                if not o.active and t1 > o.t_deactive: break
 
                 x1, y1 = int(x1 / scale), int(y1 / scale)
 
@@ -404,6 +486,7 @@ class Tracker():
 
                 x0, y0, t0 = x1, y1, t1 
 
+            # If active, print expected or current location, and rectangles.
             if o.active: 
 
                 if self.predict_match_locations:
@@ -417,7 +500,15 @@ class Tracker():
 
                 if o.current_area:
                     length = np.sqrt(o.current_area)
+                    img = cv2.circle(img, xy, int(self.MIN_DISTANCE_OR * length / scale), (255, 255, 255), 1)
                     img = cv2.circle(img, xy, int(self.MAX_DISTANCE * length / scale), o.color, 1)
+
+                if self.t - o.last_detection > self.MAX_TRACK:
+                    continue
+
+                width = 2 if self.t == o.last_detection else 1
+
+                img = o.box.draw_rectangle(img, scale = scale, color = o.color, width = width)
 
         return img
 

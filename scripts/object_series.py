@@ -31,22 +31,24 @@ def main():
     parser.add_argument('--model', default = "../models/mobilenet_ssd_v1_coco_quant_postprocess_edgetpu.tflite", help = "The tflite model")
     parser.add_argument('--labels', default = "../models/coco_labels.txt", help='Path of the labels file.')
     parser.add_argument('--input', help = 'Directory of input images.', required=True)
-    parser.add_argument('-k', default = 10, type = int)
-    parser.add_argument('--thresh', default = 0.5, type = float)
+    parser.add_argument('-k', default = 50, type = int)
+    parser.add_argument('--thresh', default = 0.4, type = float)
     parser.add_argument("--categs", default = [], nargs = "+")
     parser.add_argument("--frames", default = 0, type = int)
     parser.add_argument("--predict_matches", default = False, action = "store_true")
     parser.add_argument("--max_missing", default = 5, type = int)
-    parser.add_argument("--max_distance", default = 0.125, type = float)
+    parser.add_argument("--min_distance_or", default = 0.4, type = float)
+    parser.add_argument("--max_distance", default = 1.0, type = float)
+    parser.add_argument("--max_track", default = 0, type = int)
     parser.add_argument("--max_overlap", default = 0.25, type = float)
     parser.add_argument("--min_obs", default = 5, type = float)
-    parser.add_argument("--contrail", default = 0, type = int)
+    parser.add_argument("--contrail", default = 25, type = int)
     parser.add_argument("--select_roi", default = False, action = "store_true")
     parser.add_argument("--roi", default = [], type = float, nargs = 4)
     parser.add_argument("--xgrid", default = 1, type = int)
     parser.add_argument("--ygrid", default = 1, type = int)
     parser.add_argument("--roi_loc", default = "upper center", type = str)
-    parser.add_argument("--edge_veto", default = 0, type = float)
+    parser.add_argument("--edge_veto", default = 0.005, type = float)
     parser.add_argument("--view", default = False, action = "store_true")
     parser.add_argument("--scale", default = 1, type = float)
     parser.add_argument("--verbose", default = False, action = "store_true")
@@ -64,9 +66,11 @@ def main():
     if not args.no_tracker:
         tracker = tr.Tracker(max_missing = args.max_missing,
                              max_distance = args.max_distance,
+                             min_distance_overlap= args.min_distance_or,
+                             max_track = args.max_track,
                              predict_match_locations = args.predict_matches,
                              kalman_cov = args.kalman,
-                             contrail = args.contrail)
+                             contrail = args.contrail, roi_loc = args.roi_loc)
 
     detector = det.Detector(model = args.model, labels = args.labels,
                             categs = args.categs, thresh = args.thresh, k = args.k,
@@ -127,8 +131,8 @@ def main():
 
         ROI = [XMIN, XMAX, YMIN, YMAX]
 
-        shade = 2 * np.ones((int(img.shape[0] / args.scale), int(img.shape[1] / args.scale))).astype("uint8")
-        shade[int(YMIN/args.scale):int(YMAX/args.scale),int(XMIN/args.scale):int(XMAX/args.scale)] -= 1
+        shade = 1.5 * np.ones((int(img.shape[0] / args.scale), int(img.shape[1] / args.scale))).astype("uint8")
+        shade[int(YMIN/args.scale):int(YMAX/args.scale),int(XMIN/args.scale):int(XMAX/args.scale)] = 1
 
         if not args.no_tracker:
             tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
@@ -143,28 +147,31 @@ def main():
 
         ret, frame = vid.read()
 
-        nframe += 1
-
         print(nframe, end = " ", flush = True)
 
         if not ret: break
         if args.frames and nframe > args.frames: break
 
-        detections, image = detector.detect_grid(frame, [XMIN, YMIN, XMAX, YMAX],
-                                          xgrid = args.xgrid, ygrid = args.ygrid,
-                                          return_image = True)
+        detections = detector.detect_grid(frame, [XMIN, YMIN, XMAX, YMAX],
+                                          xgrid = args.xgrid, ygrid = args.ygrid)
 
         if detections:
             det.write(nframe, detections, args.input.split(".")[0] + "_detector.csv")
-        scaled = cv2.resize(image,
-                            None, fx = 1 / args.scale, fy = 1 / args.scale,
+
+        scaled = cv2.resize(frame, None,
+                            fx = 1 / args.scale, fy = 1 / args.scale,
                             interpolation = cv2.INTER_AREA)
 
-        if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
-
         if not args.no_tracker:
+
             tracker.update(detections)
+
+            tracker.track(frame)
+            tracker.reset_track(frame)
+
             tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
+
+        if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
 
         if args.view:
 
@@ -180,6 +187,8 @@ def main():
             out.write(scaled)
 
         if args.verbose: print('Recorded frame {}'.format(nframe))
+
+        nframe += 1
 
 
     if out is not None: out.release()
