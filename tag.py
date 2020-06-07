@@ -1,9 +1,16 @@
 import numpy as np
 import cv2
 import os, glob, time
+from random import sample
 
+label_colors = {1:(0,0,255),
+          2:(255,0,0),
+          3:(0,255,0),
+          4:(255,0,255),
+          5:(0,255,255),
+          6:(255,255,0)}
 
-def tag_objects(frameId, image, videoFile):
+def tag_objects(frameId, image, videoFile, label_list):
     '''
     Initializes and completes the tagging process for a single frame.
     Inputs:
@@ -14,22 +21,23 @@ def tag_objects(frameId, image, videoFile):
         output_dict - dictionary of features which can then be serialized to a
                       tf_example object
     '''
-    output_dict = {'video': str(videoFile), 'source_id': str(frameId), 'image_width':None, 'image_height':None,
+    videoFile_pathless = videoFile.split("/")[-1]
+    output_dict = {'video': str(videoFile_pathless), 'source_id': str(frameId),
+                   'image_width':None, 'image_height':None,
                     'xmins':[], 'xmaxs':[], 'ymins':[], 'ymaxs':[], 'classes':[],
                     'classes_text':[]}
-
-    output_dict['image_height'] = image.shape[0]
-    output_dict['image_width']  = image.shape[1]
-
+    output_dict['image_height']=image.shape[0]
+    output_dict['image_width']=image.shape[1]
     clone = image.copy()
     cv2.namedWindow("image")
     cv2.startWindowThread()
     cv2.namedWindow("image")
 
     while True:
+        done = False
         # display the image and allow bounding box selection
         cv2.imshow("image", image)
-        cv2.moveWindow("image", -305, -1050)
+        #cv2.moveWindow("image", -305, -1000)
         ROI = cv2.selectROI("image", image, showCrosshair=False)
         cv2.destroyWindow("ROI selector")
         cv2.waitKey(100)
@@ -43,42 +51,6 @@ def tag_objects(frameId, image, videoFile):
         if key == ord("r"):
             image = clone.copy()
 
-        # if the 'p' key is pressed, save coordinates, 'person', and draw rectangle in green.
-        if key == ord("p") or key == ord("P"):
-            image = clone.copy()
-            cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 0), 1)
-            update_dict_coords(output_dict, 1, 'person', corner1, corner2)
-            cv2.imshow('image', image)
-            if key == ord("P"): break
-            clone = image.copy()
-
-        # if the 'b' key is pressed, save coordinates, 'bus', and draw rectangle in red.
-        if key == ord("b") or key == ord("B"):
-            image = clone.copy()
-            cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 0, 255), 1)
-            update_dict_coords(output_dict, 3, 'bus', corner1, corner2)
-            cv2.imshow('image', image)
-            if key == ord("B"): break
-            clone = image.copy()
-
-        # if the 'a' key is pressed, save coordinates, 'car', and draw rectangle in yellow.
-        if key == ord("a") or key == ord("A"):
-            image = clone.copy()
-            cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 255), 1)
-            update_dict_coords(output_dict, 2, 'car', corner1, corner2)
-            cv2.imshow('image', image)
-            if key == ord("C"): break
-            clone = image.copy()
-
-        # if the 't' key is pressed, save coordinates, 'truck', and draw rectangle in magenta.
-        if key == ord("t") or key == ord("T"):
-            image = clone.copy()
-            cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (255, 0, 255), 1)
-            update_dict_coords(output_dict, 4, 'truck', corner1, corner2)
-            cv2.imshow('image', image)
-            if key == ord("T"): break
-            clone = image.copy()
-
         # If the 's' key is pressed, break from the loop and return an empty dictionary.
         elif key == ord("s"):
             output_dict = {}
@@ -87,10 +59,27 @@ def tag_objects(frameId, image, videoFile):
         elif key == ord("q"):
             break
 
+        for i, (label, letter) in enumerate(label_list):
+            if key == ord(letter.lower()) or key == ord(letter.upper()):
+                if i >= len(label_colors):
+                    color = (255,255,0)
+                else:
+                    color = label_colors[i+1]
+                image = clone.copy()
+                cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), color, 1)
+                update_dict_coords(output_dict, i+1, label, corner1, corner2)
+                cv2.imshow('image', image)
+                if key == ord(letter.upper()):
+                    done=True
+                    break
+                clone = image.copy()
+        if done: break
+
+
+
     # close all open windows
     cv2.destroyAllWindows()
     cv2.waitKey(10)
-
     return output_dict
 
 
@@ -178,12 +167,6 @@ def update_dict_coords(output_dict, label, class_text, corner1, corner2):
     Returns nothing - modifies output_dict in place.
     '''
     bb = order_bounding_box(corner1, corner2)
-
-    # If it's empty, don't add it.
-    if bb[0][0] == 0 and bb[0][1] == 0 and \
-       bb[1][0] == 0 and bb[1][1] == 0:
-        return
-
     output_dict['xmins'].append(bb[0][0])
     output_dict['ymins'].append(bb[0][1])
     output_dict['xmaxs'].append(bb[1][0])
@@ -201,17 +184,21 @@ def order_bounding_box(corner1, corner2):
     lower_right = (max(corner1[0], corner2[0]), max(corner1[1], corner2[1]))
     return [upper_left, lower_right]
 
-def print_tagging_instructions():
+def print_tagging_instructions(label_list):
     '''
     Prints instructions for tagging objects.
     '''
+
     print("*******************************************************************")
     print("Instructions for tagging frames")
     print("1. Drag a bounding box around the visible part of the object.")
     print('2. Press "enter" to accept bounding box.  Press "c" to redo.')
     print('Bounding box should turn white when accepted.')
-    print("3.  Once the bounding box is white, press 'p' for person, 'a' for auto / car,")
-    print("'b' for bus, 't' for truck, 'r' to redo, 'q' to quit the frame, and")
+    print("3.  Once the bounding box is white, press")
+    for (label, letter) in label_list:
+        print("'{}' for {}".format(letter, label))
+    print("'r' to redo")
+    print("'q' to quit the frame, and")
     print("'s' to skip the frame without saving a record.")
     print("4.  If you tagged a person, car, truck, or bus, the bounding box should change color.")
     print("5.  To quit before the number of frames specified has been tagged, press Ctrl-C.")
@@ -228,3 +215,20 @@ def print_summary(count, output_path):
     print("Summary:")
     print("You tagged {} frames.".format(count))
     print("*******************************************************************")
+
+def sample_bins(frames_tagged, num_records, num_bins, frame_lim_low, frame_lim_high):
+    #Create bins
+    bins = []
+    frame_set = set()
+    width = (frame_lim_high + 1 - frame_lim_low)/num_bins
+    divs = np.linspace(frame_lim_low, frame_lim_high + 1, num_bins + 1)
+    for i in range(num_bins):
+        bins.append([x for x in range(int(divs[i]), int(divs[i+1]))])
+    #Count number of frames in each bin.
+    end_frames_per_bin = int((len(frames_tagged) + 5*num_records)/num_bins)
+    for bin in bins:
+        n_bin = int((end_frames_per_bin - len(set(bin).intersection(frames_tagged)))/5)
+        n_bin = n_bin if n_bin>0 else 1
+        frames_bin = set(sample(range(bin[0],bin[-1]),n_bin))
+        frame_set = frame_set.union(frames_bin)
+    return frame_set

@@ -1,7 +1,11 @@
+import sys
+
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
 from collections import deque
+
+from detector import Detection, BBox
 
 import cv2
 
@@ -31,20 +35,23 @@ class Object():
         self.ts   = []
         self.missing = 0
 
+        self.box = None
+
         self.current_area = 0
 
-        if color is None:
+        self.last_detection = None
+
+        if color is not None: self.color = color
+        else:
 
             self.color = bgr_colors[self.id % len(bgr_colors)]
 
-        else: 
-        
-            self.color = color
 
         self.nobs = 0
         self.active = True
 
         self.kalman_cov = kalman_cov
+
 
     def make_kalman(self):
 
@@ -58,19 +65,33 @@ class Object():
         self.kf_means = [self.xyt[0][0], 0, self.xyt[0][1], 0]
         self.kf_covs  = [0, 0, 0, 0]
 
+    def fillna(self, t):
 
-    def update(self, x, y, t, area = None, conf = None, ts = None):
+        self.xyt.append((np.nan, np.nan, t))
+        self.area.append(None)
+        self.conf.append(None)
+        self.ts.append(None)
+
+
+    def update(self, det, t, ts = None):
 
         # Yay recursion :-)
         if self.xyt and t - 1 != self.last_time:
-            self.update(np.nan, np.nan, t - 1)
+            self.update(None, t - 1)
 
-        self.xyt.append((x, y, t))
-        self.area.append(area)
-        self.conf.append(conf)
-        self.ts.append(ts)
+        if det: 
 
-        self.current_area = area
+            self.last_detection = t
+
+            self.xyt.append((det.x, det.y, t))
+            self.area.append(det.area)
+            self.conf.append(det.conf)
+            self.ts.append(ts)
+
+            self.current_area = det.area
+            self.box = det.box
+
+        else: self.fillna(t)
 
         if len(self.xyt) == 1: 
 
@@ -79,14 +100,28 @@ class Object():
 
         else:
             
-            if x is np.nan:
+            if det is None:
 
                 self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, None)
 
             else: 
 
-                self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array([x, y]))
+                self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array(det.xy))
                 self.nobs += 1
+
+
+    def update_track(self, x, y, t, box, ts = None):
+
+        self.xyt.append((x, y, t))
+        self.ts.append(ts)
+
+        self.box = box
+        self.current_area = box.area
+
+        self.area.append(box.area)
+        self.conf.append(np.nan)
+
+        self.kf_means, self.kf_covs = self.kalman.filter_update(self.kf_means, self.kf_covs, np.array((x, y)))
 
 
     def set_color(self, c = None):
@@ -100,12 +135,15 @@ class Object():
 
         return self.xyt[-1][2]
 
+
     @property
     def last_location(self):
 
         return self.xyt[-1][:2]
 
     def predict_location(self, t):
+
+        if self.nobs < 4: return self.xyt[-1][:2]
 
         means, covs = self.kf_means, self.kf_covs
 
@@ -175,9 +213,10 @@ class Object():
 
         return df
 
-    def deactivate(self):
+    def deactivate(self, t):
 
         self.active = False
+        self.t_deactive = t
 
 
 
@@ -186,8 +225,9 @@ class Tracker():
     def __init__(self, 
                  max_missing = 4, max_distance = 50, 
                  min_distance_overlap = 0.02,
+                 max_track = 0,
                  predict_match_locations = False,
-                 kalman_cov = 0,
+                 kalman_cov = 0, roi_loc = "upper center",
                  contrail = 0, color = (255, 255, 255)):
 
         self.oid = 0
@@ -205,10 +245,22 @@ class Tracker():
         self.MAX_DISTANCE    = max_distance
         self.MIN_DISTANCE_OR = min_distance_overlap
 
+        self.MAX_TRACK = max_track
+
         self.color = color
 
         self.roi = None
         self.roi_buffer = 0
+
+        loc = roi_loc.split(" ")
+        self.vloc, self.hloc = loc[0], loc[1]
+
+        if self.vloc not in ["upper", "middle", "lower"]:
+            raise(ValueError, "Vertical location must be upper, middle, or lower.")
+
+        if self.hloc not in ["left", "center", "right"]:
+            raise(ValueError, "Horizontal location must be left, center, or right.")
+
 
     def set_roi(self, roi, roi_buffer = 0):
 
@@ -250,48 +302,52 @@ class Tracker():
 
         return locations
 
+
+    def edge_veto(self, box):
+
+        if box.xmin < self.roi["xmin"] + self.roi_buffer: return True
+        if box.xmax > self.roi["xmax"] - self.roi_buffer: return True
+        if box.ymin < self.roi["ymin"] + self.roi_buffer: return True
+        if box.ymax > self.roi["ymax"] - self.roi_buffer: return True
+
+        return False
+
     def deactivate_objects(self):
 
         for o in self.objects.values():
 
             if not o.active: continue
 
-            if self.t - o.last_time > self.MAX_MISSING:
-                o.deactivate()
-                continue
-
-            if o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer):
-                o.deactivate()
+            if self.t - o.last_detection > self.MAX_MISSING or \
+               o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer):
+                o.deactivate(self.t)
 
 
-    def update(self, new_points, areas = None, confs = None, ts = None, colors = None):
+    def update(self, detections, frame = None, ts = None):
 
         self.t += 1
 
         # If there are no new points, abort.
-        if new_points is None or not len(new_points):
+        if not len(detections):
 
             self.deactivate_objects()
             return
 
-        if type(colors) is not list: colors = [colors for x in new_points]
-
 
         # If there are no existing, active points, add them and abort!
         if not self.n_active:
-            for idx, pt in enumerate(new_points):
+            for idx, det in enumerate(detections):
+
+                if self.edge_veto(det.box): continue
 
                 oidx = self.new_object()
-                self.objects[oidx].set_color(colors[idx])
 
-                a  = None if areas is None else areas[idx]
-                c  = None if confs is None else confs[idx]
-
-                self.objects[oidx].update(pt[0], pt[1], self.t, a, c, ts)
+                self.objects[oidx].update(det, self.t, ts)
 
             return
 
-        new_points = np.array(new_points)
+        new_points = np.array([det.xy   for det in detections])
+        new_areas  = np.array([det.area for det in detections])
         new_indexes = set(range(len(new_points)))
 
         if self.predict_match_locations:
@@ -304,10 +360,7 @@ class Tracker():
 
         D = cdist(obj_points, new_points)
 
-        if areas is None:
-            D = np.ma.array(D, mask = D > self.MAX_DISTANCE)
-        else:
-            D = np.ma.array(D, mask = D > self.MAX_DISTANCE * np.sqrt(areas)[np.newaxis,:])
+        D = np.ma.array(D, mask = D > self.MAX_DISTANCE * np.sqrt(new_areas)[np.newaxis,:])
   
         while not D.mask.all():
 
@@ -323,14 +376,13 @@ class Tracker():
             obj_idx = obj_indexes[idx[0]]
             new_idx = idx[1]
 
-            new_xy = new_points[new_idx]
-            
-            if areas is None:
-                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, ts = ts)
+            # new_xy = detections[new_idx].xy
+            det = detections[new_idx]
 
-            else:
-                self.objects[obj_idx].update(new_xy[0], new_xy[1], self.t, 
-                                             areas[new_idx], confs[new_idx], ts = ts)
+            if self.edge_veto(det.box):
+                self.objects[obj_idx].deactivate(self.t)
+            
+            self.objects[obj_idx].update(det, self.t, ts = ts)
 
             # We won't have to deal with this one.
             new_indexes -= {idx[1]}
@@ -342,40 +394,74 @@ class Tracker():
         D.mask = False
         for idx in new_indexes:
 
-            if areas is None:
-                if D[:,idx].min() < self.MAX_DISTANCE: continue
+            if D[:,idx].min() < self.MIN_DISTANCE_OR * np.sqrt(new_areas[idx]): continue
 
-            else: 
-                if D[:,idx].min() < self.MAX_DISTANCE * np.sqrt(areas[idx]): continue
+            # x, y = new_points[idx]
+            det = detections[idx]
 
-            x, y = new_points[idx]
-            if x < self.roi["xmin"] + self.roi_buffer: continue 
-            if x > self.roi["xmax"] - self.roi_buffer: continue 
-            if y < self.roi["ymin"] + self.roi_buffer: continue 
-            if y > self.roi["ymax"] - self.roi_buffer: continue 
+            if self.edge_veto(det.box): continue
             
             oidx = self.new_object()
 
-            if areas is None:
-                self.objects[oidx].update(x, y, self.t, ts = ts)
-
-            else:
-                self.objects[oidx].update(x, y, self.t, areas[idx], confs[idx], ts = ts)
-
-            self.objects[oidx].set_color(colors[idx])
+            self.objects[oidx].update(det, self.t, ts = ts)
 
 
         self.deactivate_objects()
 
 
-    def draw(self, img, scale = 1):
+    def reset_track(self, frame = None):
+
+        for tr_idx, oidx in enumerate(self.objects):
+
+            if not self.objects[oidx].active:  continue
+
+            # Only update the tracker if we have a detection.
+            if self.objects[oidx].last_detection != self.t:
+                # If it has been longer than max_track...
+                if self.t - self.objects[oidx].last_detection >= self.MAX_TRACK:
+                    self.objects[oidx].tracker = None 
+                continue
+
+            box = self.objects[oidx].box
+            if box.xmin < 0 or box.ymin < 0: continue
+            if box.xmax > frame.shape[1]:    continue
+            if box.ymax > frame.shape[0]:    continue
+
+            self.objects[oidx].tracker = cv2.TrackerCSRT_create()
+            self.objects[oidx].tracker.init(frame, box.min_and_width())
+
+
+    def track(self, frame, ts = None):
+
+        for oidx, o in self.objects.items():
+
+            # If it was detected this round, get out!
+            if o.last_detection == self.t: continue
+            if o.tracker is None: continue
+
+            ret, new_box = o.tracker.update(frame)
+
+            if not ret:
+                o.tracker = None
+                continue
+
+            new_box = BBox(xmin = new_box[0], ymin = new_box[1], 
+                           xmax = new_box[0] + new_box[2], 
+                           ymax = new_box[1] + new_box[3])
+
+            x, y = new_box.loc(self.hloc, self.vloc)
+
+            self.objects[oidx].update_track(x, y, self.t, new_box, ts = ts)
+
+
+    def draw(self, img, min_obs = 5, scale = 1):
 
         depth = self.CONTRAIL
 
         for o in self.objects.values():
 
-            if o.last_time < self.t - depth: continue
-            if o.nobs < 5: continue
+            if o.last_detection < self.t - depth: continue
+            if o.nobs < min_obs: continue
 
             x0, y0, t0 = None, None, None
 
@@ -385,6 +471,8 @@ class Tracker():
 
                 # If not Kalman smoothing, these can be empty.
                 if np.isnan(x1): continue
+
+                if not o.active and t1 > o.t_deactive: break
 
                 x1, y1 = int(x1 / scale), int(y1 / scale)
 
@@ -398,6 +486,7 @@ class Tracker():
 
                 x0, y0, t0 = x1, y1, t1 
 
+            # If active, print expected or current location, and rectangles.
             if o.active: 
 
                 if self.predict_match_locations:
@@ -411,15 +500,28 @@ class Tracker():
 
                 if o.current_area:
                     length = np.sqrt(o.current_area)
+                    img = cv2.circle(img, xy, int(self.MIN_DISTANCE_OR * length / scale), (255, 255, 255), 1)
                     img = cv2.circle(img, xy, int(self.MAX_DISTANCE * length / scale), o.color, 1)
+
+                if self.t - o.last_detection > self.MAX_TRACK:
+                    continue
+
+                width = 2 if self.t == o.last_detection else 1
+
+                img = o.box.draw_rectangle(img, scale = scale, color = o.color, width = width)
 
         return img
 
     def write(self, output):
 
-        df_out = pd.concat([o.df for o in self.objects.values()])
+        if self.oid:
 
-        df_out.to_csv(output, index = False)
+            df_out = pd.concat([o.df for o in self.objects.values()])
+            df_out.to_csv(output, index = False)
+
+        else:
+
+            pd.DataFrame(columns = ["x", "y", "t", "ts", "o", "area", "conf"]).to_csv(output, index = False)
 
     @property
     def n_active(self):

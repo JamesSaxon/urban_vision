@@ -14,10 +14,13 @@ parser.add_argument('--records', default=20, help='Number of frames to tag.',
 parser.add_argument('--duration', help='Duration of the video in minutes.',
                         required=True, type=float)
 parser.add_argument('--start', default=0, type=float, help='Minute mark to start tagging.')
+parser.add_argument('--file', help='CSV file that lists objects and letters for tagging')
+
 
 args = parser.parse_args()
 
 videoFile = args.video
+videoFile_pathless = videoFile.split("/")[-1]
 num_records = args.records
 video_duration = args.duration*60.
 
@@ -25,8 +28,15 @@ video_duration = args.duration*60.
 trackerType = "CSRT"
 
 
-stem = videoFile.split(".")[0]
+stem = videoFile_pathless.split(".")[0]
 json_filename = stem + "_records.json"
+
+with open(args.file, 'r') as read_obj:
+    # pass the file object to reader() to get the reader object
+    csv_reader = csv.reader(read_obj)
+    # Get all rows of csv from csv_reader object as list of tuples
+    label_list = list(map(tuple, csv_reader))
+    # display all rows of csv
 
 #Add code to read in frames from csv.
 
@@ -48,7 +58,7 @@ else:
                 json_filename, len(frames_tagged)))
     print(frames_tagged)
 
-tag.print_tagging_instructions()
+tag.print_tagging_instructions(label_list)
 
 #Make frames to tag list
 cap = cv2.VideoCapture(videoFile)
@@ -59,17 +69,18 @@ start_frame = args.start*60.*frameRate
 if args.start > args.duration:
     start_frame = args.start
 
+frame_set = tag.sample_bins(frames_tagged, num_records, 10, start_frame, int(video_duration*frameRate))
+print("frame_set: ", frame_set)
+'''
 try:
     frame_set = set(sample(range(int(start_frame),
                                  int(video_duration*frameRate)),
-                           num_records))
-
-    frame_set = sorted(list(frame_set))
-
+                                 num_records))
     print("frame_set: ", frame_set)
 except ValueError:
     print("Sample larger than population or is negative - \
             Choose a different number of frames to tag.")
+'''
 
 records_count = 0
 num_tagged = 0
@@ -89,7 +100,7 @@ try:
             print("Frame number {}.  This is record {} out of {}.".format(
                         frameId, num_tagged + 1, num_records))
 
-            output_dict = tag.tag_objects(frameId, image, videoFile)
+            output_dict = tag.tag_objects(frameId, image, videoFile_pathless, label_list)
             if output_dict:
 
                 #Write output_dict to file
@@ -122,42 +133,36 @@ try:
                 #Read next frame and update multitracker object
                 #Display bboxes (on cloned image) and ask user if they accept the
                 #frame or not.  If not quit
-
-                get_next = True
-
                 while True:
-
-                    if get_next:
-                        next_frameId = int(cap.get(1))
-                        ret, next_image = cap.read()
-                        clone = next_image.copy()
-                        if not ret:
-                            print("Could not read frame.")
-                            break
-                        if next_frameId in frames_tagged:
-                            print("A record for frame {} already exists.".format(next_frameId))
-                            cv2.destroyWindow('MultiTracker')
-                            cv2.waitKey(100)
-                            break
-                        ret, boxes = multiTracker.update(next_image)
-
-                        # draw tracked objects
-                        for i, newbox in enumerate(boxes):
-                            p1 = (int(newbox[0]), int(newbox[1]))
-                            p2 = (int(newbox[0] + newbox[2]), int(newbox[1] + newbox[3]))
-                            cv2.rectangle(clone, p1, p2, colors[i], 2, 1)
-
-                        # show frame
-                        cv2.namedWindow("MultiTracker")
-                        cv2.startWindowThread()
-                        cv2.imshow('MultiTracker', clone)
-                        cv2.moveWindow("MultiTracker", -305, -1050)
+                    next_frameId = int(cap.get(1))
+                    ret, next_image = cap.read()
+                    clone = next_image.copy()
+                    if not ret:
+                        print("Could not read frame.")
+                        break
+                    if next_frameId in frames_tagged:
+                        print("A record for frame {} already exists.".format(next_frameId))
+                        cv2.destroyWindow('MultiTracker')
                         cv2.waitKey(100)
+                        break
+                    ret, boxes = multiTracker.update(next_image)
 
+                    # draw tracked objects
+                    for i, newbox in enumerate(boxes):
+                        p1 = (int(newbox[0]), int(newbox[1]))
+                        p2 = (int(newbox[0] + newbox[2]), int(newbox[1] + newbox[3]))
+                        cv2.rectangle(clone, p1, p2, colors[i], 2, 1)
+
+                    # show frame
+                    cv2.namedWindow("MultiTracker")
+                    cv2.startWindowThread()
+                    cv2.imshow('MultiTracker', clone)
+                    #cv2.moveWindow("MultiTracker", -305, -1000)
+                    cv2.waitKey(100)
                     print("Press y to accept this tagged frame.")
                     print("Press x to quit without accepting.")
                     k = cv2.waitKey(0) & 0xFF
-                    if k == ord('y'):  # y is pressed
+                    if (k == 121):  # y is pressed
                         next_output_dict = tag.update_tracked(output_dict,
                                                               boxes,
                                                               next_image,
@@ -169,16 +174,16 @@ try:
                         fp.close()
                         records_count += 1
 
-                        get_next = True
-
                     elif k == ord('x'):
                         cv2.destroyWindow('MultiTracker')
                         cv2.waitKey(100)
                         break
 
-                    else: 
-
-                        get_next = False
+                    elif k == ord('r'):
+                        frame_set.add(next_frameId + 1)
+                        cv2.destroyWindow('MultiTracker')
+                        cv2.waitKey(100)
+                        break
 
 except KeyboardInterrupt:
     print("Tagging interrupted.  Writing out {} records instead of {}.".format(
