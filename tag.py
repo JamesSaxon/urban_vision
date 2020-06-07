@@ -17,8 +17,10 @@ def tag_objects(frameId, image, videoFile):
     output_dict = {'video': str(videoFile), 'source_id': str(frameId), 'image_width':None, 'image_height':None,
                     'xmins':[], 'xmaxs':[], 'ymins':[], 'ymaxs':[], 'classes':[],
                     'classes_text':[]}
-    output_dict['image_height']=image.shape[0]
-    output_dict['image_width']=image.shape[1]
+
+    output_dict['image_height'] = image.shape[0]
+    output_dict['image_width']  = image.shape[1]
+
     clone = image.copy()
     cv2.namedWindow("image")
     cv2.startWindowThread()
@@ -27,7 +29,7 @@ def tag_objects(frameId, image, videoFile):
     while True:
         # display the image and allow bounding box selection
         cv2.imshow("image", image)
-        #cv2.moveWindow("image", -305, -1000)
+        cv2.moveWindow("image", -305, -1050)
         ROI = cv2.selectROI("image", image, showCrosshair=False)
         cv2.destroyWindow("ROI selector")
         cv2.waitKey(100)
@@ -59,8 +61,8 @@ def tag_objects(frameId, image, videoFile):
             if key == ord("B"): break
             clone = image.copy()
 
-        # if the 'c' key is pressed, save coordinates, 'car', and draw rectangle in yellow.
-        if key == ord("c") or key == ord("C"):
+        # if the 'a' key is pressed, save coordinates, 'car', and draw rectangle in yellow.
+        if key == ord("a") or key == ord("A"):
             image = clone.copy()
             cv2.rectangle(image, (ROI[0], ROI[1]), (ROI[0]+ROI[2], ROI[1]+ROI[3]), (0, 255, 255), 1)
             update_dict_coords(output_dict, 2, 'car', corner1, corner2)
@@ -176,6 +178,12 @@ def update_dict_coords(output_dict, label, class_text, corner1, corner2):
     Returns nothing - modifies output_dict in place.
     '''
     bb = order_bounding_box(corner1, corner2)
+
+    # If it's empty, don't add it.
+    if bb[0][0] == 0 and bb[0][1] == 0 and \
+       bb[1][0] == 0 and bb[1][1] == 0:
+        return
+
     output_dict['xmins'].append(bb[0][0])
     output_dict['ymins'].append(bb[0][1])
     output_dict['xmaxs'].append(bb[1][0])
@@ -202,7 +210,7 @@ def print_tagging_instructions():
     print("1. Drag a bounding box around the visible part of the object.")
     print('2. Press "enter" to accept bounding box.  Press "c" to redo.')
     print('Bounding box should turn white when accepted.')
-    print("3.  Once the bounding box is white, press 'p' for person, 'c' for car,")
+    print("3.  Once the bounding box is white, press 'p' for person, 'a' for auto / car,")
     print("'b' for bus, 't' for truck, 'r' to redo, 'q' to quit the frame, and")
     print("'s' to skip the frame without saving a record.")
     print("4.  If you tagged a person, car, truck, or bus, the bounding box should change color.")

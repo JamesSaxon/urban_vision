@@ -62,7 +62,10 @@ if args.start > args.duration:
 try:
     frame_set = set(sample(range(int(start_frame),
                                  int(video_duration*frameRate)),
-                                 num_records))
+                           num_records))
+
+    frame_set = sorted(list(frame_set))
+
     print("frame_set: ", frame_set)
 except ValueError:
     print("Sample larger than population or is negative - \
@@ -119,36 +122,42 @@ try:
                 #Read next frame and update multitracker object
                 #Display bboxes (on cloned image) and ask user if they accept the
                 #frame or not.  If not quit
+
+                get_next = True
+
                 while True:
-                    next_frameId = int(cap.get(1))
-                    ret, next_image = cap.read()
-                    clone = next_image.copy()
-                    if not ret:
-                        print("Could not read frame.")
-                        break
-                    if next_frameId in frames_tagged:
-                        print("A record for frame {} already exists.".format(next_frameId))
-                        cv2.destroyWindow('MultiTracker')
+
+                    if get_next:
+                        next_frameId = int(cap.get(1))
+                        ret, next_image = cap.read()
+                        clone = next_image.copy()
+                        if not ret:
+                            print("Could not read frame.")
+                            break
+                        if next_frameId in frames_tagged:
+                            print("A record for frame {} already exists.".format(next_frameId))
+                            cv2.destroyWindow('MultiTracker')
+                            cv2.waitKey(100)
+                            break
+                        ret, boxes = multiTracker.update(next_image)
+
+                        # draw tracked objects
+                        for i, newbox in enumerate(boxes):
+                            p1 = (int(newbox[0]), int(newbox[1]))
+                            p2 = (int(newbox[0] + newbox[2]), int(newbox[1] + newbox[3]))
+                            cv2.rectangle(clone, p1, p2, colors[i], 2, 1)
+
+                        # show frame
+                        cv2.namedWindow("MultiTracker")
+                        cv2.startWindowThread()
+                        cv2.imshow('MultiTracker', clone)
+                        cv2.moveWindow("MultiTracker", -305, -1050)
                         cv2.waitKey(100)
-                        break
-                    ret, boxes = multiTracker.update(next_image)
 
-                    # draw tracked objects
-                    for i, newbox in enumerate(boxes):
-                        p1 = (int(newbox[0]), int(newbox[1]))
-                        p2 = (int(newbox[0] + newbox[2]), int(newbox[1] + newbox[3]))
-                        cv2.rectangle(clone, p1, p2, colors[i], 2, 1)
-
-                    # show frame
-                    cv2.namedWindow("MultiTracker")
-                    cv2.startWindowThread()
-                    cv2.imshow('MultiTracker', clone)
-                    #cv2.moveWindow("MultiTracker", -305, -1000)
-                    cv2.waitKey(100)
                     print("Press y to accept this tagged frame.")
                     print("Press x to quit without accepting.")
                     k = cv2.waitKey(0) & 0xFF
-                    if (k == 121):  # y is pressed
+                    if k == ord('y'):  # y is pressed
                         next_output_dict = tag.update_tracked(output_dict,
                                                               boxes,
                                                               next_image,
@@ -160,10 +169,17 @@ try:
                         fp.close()
                         records_count += 1
 
+                        get_next = True
+
                     elif k == ord('x'):
                         cv2.destroyWindow('MultiTracker')
                         cv2.waitKey(100)
                         break
+
+                    else: 
+
+                        get_next = False
+
 except KeyboardInterrupt:
     print("Tagging interrupted.  Writing out {} records instead of {}.".format(
                     num_tagged, num_records))
