@@ -166,8 +166,9 @@ def main():
 
             tracker.update(detections)
 
-            tracker.track(frame)
-            tracker.reset_track(frame)
+            if args.max_track:
+                tracker.track(frame)
+                tracker.reset_track(frame)
 
             tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
 

@@ -411,6 +411,8 @@ class Tracker():
 
     def reset_track(self, frame = None):
 
+        if not self.MAX_TRACK: return
+
         for tr_idx, oidx in enumerate(self.objects):
 
             if not self.objects[oidx].active:  continue
