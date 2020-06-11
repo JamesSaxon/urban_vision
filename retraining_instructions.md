@@ -32,7 +32,9 @@ item {
 ```
 
 4. In the /tensorflow/models/research/ directory, run
-    `./retrain_detection_model.sh --num_training_steps 2500 --num_eval_steps 500`
+   ```
+   ./retrain_detection_model.sh --num_training_steps 2500 --num_eval_steps 500
+   ```
    We've used eval = training / 5.
 
 
