@@ -12,7 +12,7 @@ line 25: DATASET_DIR="${LEARN_DIR}"
     a ckpt directory with pipeline.config and checkpoint files, and the file lsd_label_map.pbtxt.
     Also make sure the train directory doesn't exist.
   * You should already have copied over the converted tfrecord files.
-  * You also need a cat hwp_label_map.pbtxt, of the form below
+  * You also need to either edit label_map.pbtxt (of the form below) or change the pipeline config in the ckpt directories.
   * Inside learn_hwp (or whatever) can wget, gunzip, and untar one of these models (v1 or v2), and then move it to `ckpt`
     * https://coral.ai/models/#object-detection
   * Within the pipeline file, respecify the number of classes, the mscoco → your new label map, etc. -- follow the instructions here:
