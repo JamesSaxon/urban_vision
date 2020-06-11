@@ -17,10 +17,10 @@ parser.add_argument('--ymax', help='Upper y bound (frac)', type = float, default
 parser.add_argument('--xmin', help='Lower x bound (frac)', type = float, default=0.155)
 parser.add_argument('--xmax', help='Upper x bound (frac)', type = float, default=0.838)
 parser.add_argument('--frac', help='Threshold for the fraction of object to include',
-                    default=0.4, type=float)
-parser.add_argument("--xgrid", default = 3, type = int)
+                    default=0.0, type=float)
+parser.add_argument("--xgrid", default = 1, type = int)
 parser.add_argument("--ygrid", default = 1, type = int)
-parser.add_argument("--plim", default = 25, type = int,
+parser.add_argument("--plim", default = 20, type = int,
                     help='Lower limit on pixel area in a 300x300 image')
 
 args = parser.parse_args()
@@ -33,8 +33,11 @@ file_name = file_path.split("/")[-1]
 #Set output path by inserting "roi" into the file name.
 file_path_list = file_path.split('_')
 file_path_list.insert(-1, 'roi')
-output_path = '_'.join(file_path_list)
-writer = tf.io.TFRecordWriter(output_path)
+if args.xgrid > 1: file_path_list.insert(-1, 'xgrid{}'.format(args.xgrid))
+if args.ygrid > 1: file_path_list.insert(-1, 'ygrid{}'.format(args.ygrid))
+output_file = '_'.join(file_path_list)
+
+writer = tf.io.TFRecordWriter(output_file)
 
 
 def _parse_image_function(example_proto):
@@ -69,7 +72,8 @@ else:
     YMIN = args.ymin
     YMAX = args.ymax
 
-print("ROI: ", XMIN, YMIN, XMAX, YMAX)
+print("ROI: --xmin {:.02f} --xmax {:.02f} --ymin {:.02f} --ymax {:.02f}".format(XMIN, XMAX, YMIN, YMAX))
+
 xvals = np.linspace(XMIN, XMAX, args.xgrid+1)
 yvals = np.linspace(YMIN, YMAX, args.ygrid+1)
 roi_list = []
@@ -85,23 +89,26 @@ for example in parsed_dataset:
     image_width = image.shape[1]
     image_height = image.shape[0]
 
-    position = {0:'L', 1:'C', 2:'R'}
+    alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
     for k, roi in enumerate(roi_list):
         _xmin = int(roi[0]*image_width)
         _xmax = int(roi[1]*image_width)
         _ymin = int(roi[2]*image_height)
         _ymax = int(roi[3]*image_height)
         new_image = image[_ymin:_ymax,_xmin:_xmax,:]
+        image_size = (_ymax - _ymin) * (_xmax - _xmin)
+
         _, im_buf_arr = cv2.imencode(".jpg", new_image)
 
         #Initialize dictionary for new tfrecord.
         output_dict = {'video': str(example['image/video'].numpy(), 'utf-8'),
-                   'source_id': str(example['image/source_id'].numpy(), 'utf-8') + position[k],
-                   'image_width':new_image.shape[1],
-                   'image_height':new_image.shape[0],
-                   'image_encoded':im_buf_arr.tobytes(),
-                    'xmins':[], 'xmaxs':[], 'ymins':[], 'ymaxs':[], 'classes':[],
-                    'classes_text':[]}
+                       'source_id': str(example['image/source_id'].numpy(), 'utf-8') + alpha[k],
+                       'image_width':new_image.shape[1],
+                       'image_height':new_image.shape[0],
+                       'image_encoded':im_buf_arr.tobytes(),
+                       'xmins':[], 'xmaxs':[], 'ymins':[], 'ymaxs':[], 'classes':[],
+                       'classes_text':[]}
 
         #Iterate through objects, check if object is inside ROI, if so, add to dictionary.
         labels = example['image/object/class/text'].numpy().astype(str)
@@ -120,15 +127,19 @@ for example in parsed_dataset:
             ymin_highest = _ymax - box_height*args.frac
 
             if xmin < xmin_highest and xmax > xmax_lowest and ymin < ymin_highest and ymax > ymax_lowest:
+
                 new_xmin = max(0, xmin - _xmin)
-                new_xmax = min(_xmax - _xmin, xmax - _xmin)
                 new_ymin = max(0, ymin - _ymin)
+                new_xmax = min(_xmax - _xmin, xmax - _xmin)
                 new_ymax = min(_ymax - _ymin, ymax - _ymin)
+
+                # Write it if, in the rescaled image space, of 300x300, it exceeds plim pixels.
                 box_area = (new_xmax - new_xmin) * (new_ymax - new_ymin)
-                if box_area > args.plim * new_image.shape[0] * new_image.shape[1]/90000:
+                if (box_area / image_size) > (args.plim / 300 / 300): 
                     train.update_dict_coords(output_dict, class_num, label, (new_xmin, new_ymin), (new_xmax,new_ymax))
 
         if output_dict["classes"]:
             tf_example = train.create_tf_example(output_dict)
             writer.write(tf_example.SerializeToString())
+
 writer.close()
