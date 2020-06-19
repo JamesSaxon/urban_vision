@@ -41,7 +41,7 @@ def main():
     parser.add_argument("--max_distance", default = 1.0, type = float)
     parser.add_argument("--max_track", default = 0, type = int)
     parser.add_argument("--max_overlap", default = 0.25, type = float)
-    parser.add_argument("--min_obs", default = 5, type = float)
+    parser.add_argument("--candidate_obs", default = 5, type = float)
     parser.add_argument("--contrail", default = 25, type = int)
     parser.add_argument("--select_roi", default = False, action = "store_true")
     parser.add_argument("--roi", default = [], type = float, nargs = 4)
@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--ygrid", default = 1, type = int)
     parser.add_argument("--roi_loc", default = "upper center", type = str)
     parser.add_argument("--edge_veto", default = 0.005, type = float)
+    parser.add_argument("--min_area", default = 0, type = float)
     parser.add_argument("--view", default = False, action = "store_true")
     parser.add_argument("--scale", default = 1, type = float)
     parser.add_argument("--verbose", default = False, action = "store_true")
@@ -68,6 +69,7 @@ def main():
                              max_distance = args.max_distance,
                              min_distance_overlap= args.min_distance_or,
                              max_track = args.max_track,
+                             candidate_obs = args.candidate_obs,
                              predict_match_locations = args.predict_matches,
                              kalman_cov = args.kalman,
                              contrail = args.contrail, roi_loc = args.roi_loc)
@@ -76,6 +78,7 @@ def main():
                             categs = args.categs, thresh = args.thresh, k = args.k,
                             max_overlap = args.max_overlap,
                             loc = args.roi_loc, edge_veto = args.edge_veto,
+                            min_area = args.min_area,
                             verbose = False)
 
     vid = cv2.VideoCapture(args.input)
@@ -170,7 +173,7 @@ def main():
                 tracker.track(frame)
                 tracker.reset_track(frame)
 
-            tracker.draw(scaled, scale = args.scale, min_obs = args.min_obs)
+            tracker.draw(scaled, scale = args.scale)
 
         if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
 
