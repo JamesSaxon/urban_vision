@@ -3,7 +3,9 @@ import sys
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
+
 from collections import deque
+from itertools import permutations, combinations
 
 from detector import Detection, BBox
 
@@ -292,7 +294,8 @@ class Tracker():
 
     def get_last_locations(self, return_unmatched = False, return_dict = False):
 
-        object_unmatched = {k for k, v in self.objects.items() if v.active}
+        # object_unmatched = {k for k, v in self.objects.items() if v.active}
+        object_unmatched = np.array([k for k, v in self.objects.items() if v.active])
 
         locations = np.array([self.objects[k].last_location
                               for k in object_unmatched])
@@ -305,7 +308,8 @@ class Tracker():
 
     def predict_current_locations(self, return_unmatched = False):
 
-        object_unmatched = {k for k, v in self.objects.items() if v.active}
+        # object_unmatched = {k for k, v in self.objects.items() if v.active}
+        object_unmatched = np.array([k for k, v in self.objects.items() if v.active])
 
         locations = np.array([self.objects[k].predict_location(self.t)
                               for k in object_unmatched])
@@ -335,7 +339,99 @@ class Tracker():
                 o.deactivate(self.t)
 
 
-    def update(self, detections, frame = None, ts = None):
+    def greedy_matches(self, D2, mask_candidates):
+
+        matches = {}
+
+        for include_candidates in self.INCLUDE_CANDIDATES_CYCLES:
+
+            while (    include_candidates and not (D2.mask).all()) or \
+                  (not include_candidates and not (D2.mask | mask_candidates).all()):
+
+                # This is the 2D2-index
+                if not include_candidates: # Preferentially mask the existing objects.
+                    idx = np.unravel_index(np.ma.array(D2, mask = np.logical_or(D2.mask, mask_candidates))\
+                                                        .argmin(axis = None), D2.shape)
+
+                else: # Only THEN consider new ones.
+                    idx = np.unravel_index(D2.argmin(axis = None), D2.shape)
+            
+                # This object and this observation 
+                #     are now "spoken for."
+                D2.mask[idx[0],:] = True # Old
+                D2.mask[:,idx[1]] = True # New
+
+                # Save for return...
+                matches[idx[0]] = idx[1] # Old -> New
+
+        return matches
+
+    def min_cost_matches(self, D2, mask_candidates = None):
+        
+        full_matches = {}
+
+        extra_masks = [False]
+        if mask_candidates is not None:
+            extra_masks = [mask_candidates, False]
+
+        for aux_mask in extra_masks:
+
+            nmatches  = 0
+            min_dist2 = np.inf
+
+            # Lots of negatives here -- lists of elements that are not all masked 
+            #    ("all" of masks is false).
+            old_objs = np.argwhere((D2.mask | aux_mask).all(axis = 1) == False).flatten()
+            new_objs = np.argwhere(D2.mask.all(axis = 0) == False).flatten()
+
+            # Get out of here if either is empty!)
+            size = min(len(old_objs), len(new_objs))
+            if not size: continue
+
+            best_old, best_new = None, None
+            
+            # ONE of these should be combinations and the 
+            #  other should be permutations.
+            for old_idx in combinations(old_objs, size):
+                for new_idx in permutations(new_objs, size):
+                                
+                    # Careful: if size is larger than the actually-matchable, 
+                    #   then don't match the masked ones!!
+                    matches = (D2[old_idx, new_idx].mask == False).sum()
+                    dist2   = D2[old_idx, new_idx].sum()
+                    
+                    # Search for the *most* matches possible, 
+                    #   and *within* that category, the lowest distance.
+                    if matches > nmatches or \
+                       (matches == nmatches and dist2 < min_dist2):
+                            
+                        min_dist2 = dist2
+                        nmatches = matches
+                        
+                        best_old = old_idx
+                        best_new = new_idx
+    
+            # Mask off the ones we found....
+            # possibly another pass coming.
+            for old_idx in best_old:
+                for new_idx in best_new:
+
+                    # But not if this was masked!!
+                    if D2.mask[old_idx,new_idx]: 
+                        continue
+                    
+                    D2.mask[old_idx,:] = True
+                    D2.mask[:,new_idx] = True
+
+                    # Have to extend, since we have two passes.
+                    full_matches[old_idx] = new_idx
+
+        D2.mask = False
+                    
+        return full_matches
+
+
+    def update(self, detections, frame = None, ts = None, method = "min_cost"):
 
         self.t += 1
 
@@ -369,7 +465,7 @@ class Tracker():
         else:
             obj_unmatched, obj_points = self.get_last_locations(return_unmatched = True)
 
-        obj_indexes    = {ki : k for ki, k in enumerate(obj_unmatched)}
+        # obj_indexes    = {ki : k for ki, k in enumerate(obj_unmatched)}
         obj_areas      = np.array([self.objects[o].current_area for o in obj_unmatched])
 
         D2 = cdist(obj_points, new_points, 'sqeuclidean')
@@ -382,44 +478,27 @@ class Tracker():
 
         D2 = np.ma.array(D2, mask = mask) # D2 > self.MAX_DISTANCE * np.sqrt(new_areas)[np.newaxis,:])
 
+        mask_candidates = None
         if self.NOBS_CANDIDATE:
             mask_candidates = np.array([self.objects[o].nobs < self.NOBS_CANDIDATE for o in obj_unmatched])[:,np.newaxis]
+
+        if   method == "greedy":    matches = self.greedy_matches  (D2, mask_candidates)
+        elif method == "min_cost" : matches = self.min_cost_matches(D2, mask_candidates)
+        else: raise("Update match method must be either greedy or 'min_cost'.")
   
-        for include_candidates in self.INCLUDE_CANDIDATES_CYCLES:
+        new_indexes -= set(matches.values())
+        for old_idx, new_idx in matches.items():
 
-            while (    include_candidates and not (D2.mask).all()) or \
-                  (not include_candidates and not (D2.mask | mask_candidates).all()):
+            # Get the object indexes from the array.
+            obj_idx = obj_unmatched[old_idx]
 
-                # This is the 2D2-index
-                if not include_candidates: # Preferentially mask the existing objects.
-                    idx = np.unravel_index(np.ma.array(D2, mask = np.logical_or(D2.mask, mask_candidates))\
-                                                        .argmin(axis = None), D2.shape)
+            # Grab the detection and update it.
+            det = detections[new_idx]
+            self.objects[obj_idx].update(det, self.t, ts = ts)
 
-                    if (np.logical_or(D2.mask, mask_candidates) == False).sum() > 2:
-                        print(np.ma.array(D2, mask = np.logical_or(D2.mask, mask_candidates)))
-
-                else: # Only THEN consider new ones.
-                    idx = np.unravel_index(D2.argmin(axis = None), D2.shape)
-            
-                # This object and this observation 
-                #     are now "spoken for."
-                D2.mask[idx[0],:] = True
-                D2.mask[:,idx[1]] = True
-
-                # Get the old and new detection locations
-                obj_idx = obj_indexes[idx[0]]
-                new_idx = idx[1]
-
-                # This one is no longer available...
-                new_indexes -= {new_idx}
-
-                # Grab the detection and update it.
-                det = detections[new_idx]
-                self.objects[obj_idx].update(det, self.t, ts = ts)
-
-                # And remove if necessary.
-                if self.edge_veto(det.box):
-                    self.objects[obj_idx].deactivate(self.t)
+            # And remove if necessary.
+            if self.edge_veto(det.box):
+                self.objects[obj_idx].deactivate(self.t)
             
 
         # The new_indexes are not yet new -- just potential/unmatched.
@@ -431,7 +510,6 @@ class Tracker():
 
             if D2[:,idx].min() < self.MIN_DISTANCE_OR2 * new_areas[idx]: continue
 
-            # x, y = new_points[idx]
             det = detections[idx]
 
             if self.edge_veto(det.box): continue

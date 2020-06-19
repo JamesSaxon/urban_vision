@@ -35,6 +35,7 @@ def main():
     parser.add_argument('--thresh', default = 0.4, type = float)
     parser.add_argument("--categs", default = [], nargs = "+")
     parser.add_argument("--frames", default = 0, type = int)
+    parser.add_argument("--skip", default = 0, type = int)
     parser.add_argument("--predict_matches", default = False, action = "store_true")
     parser.add_argument("--max_missing", default = 5, type = int)
     parser.add_argument("--min_distance_or", default = 0.4, type = float)
@@ -154,6 +155,9 @@ def main():
 
         if not ret: break
         if args.frames and nframe > args.frames: break
+        if nframe < args.skip:
+            nframe += 1
+            continue
 
         detections = detector.detect_grid(frame, [XMIN, YMIN, XMAX, YMAX],
                                           xgrid = args.xgrid, ygrid = args.ygrid)
