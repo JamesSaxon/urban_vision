@@ -1,80 +1,113 @@
-#!/home/jsaxon/anaconda3/envs/cv/bin/python
+#!/Users/jsaxon/anaconda/envs/cv/bin/python
 
 import cv2, sys, pandas as pd
 
-vid_dir = "../../../data/cv/vid/"
-stream = cv2.VideoCapture(vid_dir + "lsd_e_20200131.mov")
-
-geo_dir = "../../../data/cv/geo/"
-locations = pd.read_csv(geo_dir + "lsd_local.csv")
-locations["xp"] = None
-locations["yp"] = None
-
-ret, img = stream.read()
-stream.release()
-
-if not ret: sys.exit()
-
-SCALE = 2.8
-img = cv2.resize(img, None, fx = 1 / SCALE, fy = 1 / SCALE, interpolation = cv2.INTER_AREA)
-
-coords = []
 def click_and_id(event, x, y, flags, param):
+
+    global locations
     
     if event is not cv2.EVENT_LBUTTONDOWN: return
 
-    locations.loc[ri, "xp"] = round(x * SCALE, 2)
-    locations.loc[ri, "yp"] = round(y * SCALE, 2)
+    scale = param[0]
+    locations.loc[ri, "xp"] = round(x * scale, 2)
+    locations.loc[ri, "yp"] = round(y * scale, 2)
 
-    draw_points_on_image()
+    draw_points_on_image(scale)
 
-def draw_points_on_image():
+def draw_points_on_image(scale):
 
     img_pts = img.copy()
     for _, row in locations[:ri+1].iterrows():
 
         if row.xp is None or row.yp is None: continue
 
-        coords = (int(row.xp / SCALE), int(row.yp / SCALE))
+        coords = (int(row.xp / scale), int(row.yp / scale))
         cv2.circle(img_pts, coords, 5, (0, 0, 255), 2)
         cv2.putText(img_pts, row.id, coords, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
     cv2.imshow("click", img_pts)
 
 
-cv2.imshow("click", img)
-cv2.setMouseCallback("click", click_and_id)
+locations, ri, img = None, None, None
+def main(geog, video, skip = 0, scale = 1):
 
-ri, last, rmax = 0, None, locations.shape[0]
-while ri < rmax:
+    global locations, ri, img
 
-    key = cv2.waitKey(30) & 0xff
+    stream = cv2.VideoCapture(video)
+    
+    locations = pd.read_csv(geog)
 
-    if key == 27: break
-    if key == ord("q"): break
+    locations["xp"] = None
+    locations["yp"] = None
+    
+    for s in range(skip+1): ret, img = stream.read()
+    stream.release()
+    
+    if not ret:
+        print("Failed to read video stream -- exiting.")
+        sys.exit()
+    
+    img = cv2.resize(img, None, fx = 1 / scale, fy = 1 / scale, interpolation = cv2.INTER_AREA)
+    
+    coords = []
+    
+    cv2.imshow("click", img)
 
-    if key == ord("s"): 
+    cv2.setMouseCallback("click", click_and_id, [scale])
+    
+    ri, last, rmax = 0, None, locations.shape[0]
+    while ri < rmax:
 
-        ri += 1
-        continue
+        if locations.loc[ri, "id"] == "CAM":
+          ri += 1
+          continue
+    
+        key = cv2.waitKey(30) & 0xff
+    
+        if key == 27: break
+        if key == ord("q"): break
+    
+        if key == ord("s"): 
+    
+            ri += 1
+            continue
+    
+        if key == ord("u"):
+    
+            if ri: ri -= 1
+    
+            locations.loc[ri, "xp"] = None
+            locations.loc[ri, "yp"] = None
+            draw_points_on_image(scale)
+    
+    
+        if locations.loc[ri, "xp"] is not None:
+    
+            ri += 1
+    
+        if last != ri and ri < rmax:
+            print(locations.loc[ri, "id"])
+            last = ri
 
-    if key == ord("u"):
-
-        if ri: ri -= 1
-
-        locations.loc[ri, "xp"] = None
-        locations.loc[ri, "yp"] = None
-        draw_points_on_image()
+    locations["xp"] = locations["xp"].astype(int)
+    locations["yp"] = locations["yp"].astype(int)
+    print(locations)
+    
+    locations.to_csv(geog, float_format = "%.6f", index = False)
 
 
-    if locations.loc[ri, "xp"] is not None:
+if __name__ == "__main__":
 
-        ri += 1
+    import argparse
+    parser = argparse.ArgumentParser(description='Label points in a video.')
+    parser.add_argument('--geog', type = str, required = True)
+    parser.add_argument("--video", type = str, required = True)
+    parser.add_argument("--scale", type = float, default = 1.0)
+    parser.add_argument("--skip", type = int, default = 0)
+    args = parser.parse_args()
 
-    if last != ri:
-        print(locations.loc[ri, "id"])
-        last = ri
+    main(**vars(args))
 
 
-locations.dropna().to_csv(geo_dir + "lsd_e_20200131.csv", index = False)
+
 

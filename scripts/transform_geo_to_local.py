@@ -1,6 +1,5 @@
 #!/Users/jsaxon/anaconda/envs/py-geo/bin/python
 
-
 import geopandas as gpd
 import pandas as pd
 
@@ -15,9 +14,9 @@ from shapely.geometry import Point
 import argparse
 
 
-def transform_local(geo_dir, tag, angle, epsg):
+def transform_local(geog, angle, epsg):
 
-    df = pd.read_csv("{}/{}.csv".format(geo_dir, tag))
+    df = pd.read_csv(geog)
     
     geometry = gpd.GeoSeries([Point(xy) for xy in zip(df.lat, df.lon)], crs = from_epsg(4326))
     
@@ -36,20 +35,20 @@ def transform_local(geo_dir, tag, angle, epsg):
     # Just for diagnostics
     bbox = gdf.unary_union.bounds
     ax = gdf.plot(column = "idx", figsize = (2, 2 * (bbox[3] - bbox[1]) / (bbox[2] - bbox[0])))
-    ax.figure.savefig("{}/{}_local.pdf".format(geo_dir, tag),
+    gdf.loc[gdf.id == "CAM"].plot(color = "red", ax = ax)
+    ax.figure.savefig(geog.replace(".csv", ".pdf"),
                       bbox_inches = "tight", pad_inches = 0.1)
     
-    gdf = gdf[["id", "lon", "lat", "x", "y"]].copy()
-    gdf.to_csv("{}/{}_local.csv".format(geo_dir, tag), 
-               index = False, float_format = "%.6f")
+    gdf = gdf[["id", "lon", "lat", "x", "y", "xp", "yp"]].copy()
+
+    gdf.to_csv(geog, index = False, float_format = "%.6f")
     
 
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Process some integers.')
-    parser.add_argument('--geo_dir', type = str, default = "../geo/")
-    parser.add_argument("--tag", type = str, default = "i90")
+    parser = argparse.ArgumentParser(description='Get a local projection.')
+    parser.add_argument('--geog', type = str, default = "../geo/i90.csv")
     parser.add_argument("--angle", type = float, default = 0)
     parser.add_argument("--epsg", type = int, default = 3528)
     args = parser.parse_args()
