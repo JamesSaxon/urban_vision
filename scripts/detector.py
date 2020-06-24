@@ -152,7 +152,7 @@ class Detection():
 
         if box is None: 
             self.box  = None
-            self.area = None
+            self.area = 1.0
         else:
             self.box = BBox(**box)
             self.area = self.box.area
@@ -175,7 +175,7 @@ class Detector():
                  labels = "../models/coco_labels.txt",
                  relative_coord = False, keep_aspect_ratio = False,
                  categs = ["person"], thresh = 0.6, k = 1,
-                 max_overlap = 0.5,
+                 max_overlap = 0.5, min_area = 0,
                  loc = "upper center", edge_veto = 0, verbose = False):
 
 
@@ -191,6 +191,7 @@ class Detector():
         self.k      = k
 
         self.max_overlap = max_overlap
+        self.min_area = min_area
 
         self.relative_coord = relative_coord
         self.keep_aspect_ratio = keep_aspect_ratio
@@ -388,7 +389,8 @@ class Detector():
 
                 box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
 
-                det_list.append(Detection((x,y), box_dict, obj.score, label))
+                det = Detection((x,y), box_dict, obj.score, label)
+                if det.area > self.min_area: det_list.append(det)
 
 
         if return_image: return det_list, frame
