@@ -31,3 +31,12 @@
 
 
   * All set!!  Test on: `rtsp://jsaxon:passwd@192.168.1.67/1`
+
+
+  * To run scripts, also need pandas -- pip install hangs, so:
+
+    ```
+    sudo apt-get install python3-pandas
+    ```
+
+  * Also pykalman via pip3.
