@@ -49,7 +49,8 @@ def main():
     parser.add_argument("--xgrid", default = 1, type = int)
     parser.add_argument("--ygrid", default = 1, type = int)
     parser.add_argument("--roi_loc", default = "upper center", type = str)
-    parser.add_argument("--edge_veto", default = 0.005, type = float)
+    parser.add_argument("--edge_veto", default = 0.005, type = float, help = "Veto detections within this fractional distance of the edge of a (sub) ROI when DETECTING.")
+    parser.add_argument("--roi_buffer", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, within this fractional distance of the ROI, when TRACKING.")
     parser.add_argument("--min_area", default = 0, type = float)
     parser.add_argument("--view", default = False, action = "store_true")
     parser.add_argument("--scale", default = 1, type = float)
@@ -57,6 +58,12 @@ def main():
     parser.add_argument("--no_output", default = False, action = "store_true")
     parser.add_argument("--kalman", default = 50, type = int, help = "Scale of Kalman error covariance in pixels.")
     parser.add_argument("--no_tracker", default = False, action = "store_true")
+    parser.add_argument("--ofps", default = 30, type = int)
+
+    parser.add_argument("--show_heat", action = "store_true", default = False)
+    parser.add_argument("--heat_frac", type = float, default = 0.5)
+    parser.add_argument("--heat_fade", type = int, default = 0)
+    parser.add_argument("--geometry", type = str, default = "")
 
     parser.add_argument('--keep_aspect_ratio', default = False, dest='keep_aspect_ratio', action='store_true',)
 
@@ -65,6 +72,19 @@ def main():
     # Initialize engine.
     vid = cv2.VideoCapture(args.input)
 
+    FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
+
+    detector = det.Detector(model = args.model, labels = args.labels,
+                            categs = args.categs, thresh = args.thresh, k = args.k,
+                            max_overlap = args.max_overlap,
+                            loc = args.roi_loc, edge_veto = args.edge_veto,
+                            min_area = args.min_area,
+                            verbose = False)
+
+    if args.geometry and args.show_heat:
+        detector.set_world_geometry(args.geometry)
+
+    tracker = None
     if not args.no_tracker:
         tracker = tr.Tracker(max_missing = args.max_missing,
                              max_distance = args.max_distance,
@@ -75,20 +95,13 @@ def main():
                              kalman_cov = args.kalman,
                              contrail = args.contrail, roi_loc = args.roi_loc)
 
-    detector = det.Detector(model = args.model, labels = args.labels,
-                            categs = args.categs, thresh = args.thresh, k = args.k,
-                            max_overlap = args.max_overlap,
-                            loc = args.roi_loc, edge_veto = args.edge_veto,
-                            min_area = args.min_area,
-                            verbose = False)
-
     vid = cv2.VideoCapture(args.input)
 
     if not args.no_output:
 
         out = cv2.VideoWriter(args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4"),
-                              cv2.VideoWriter_fourcc(*'mp4v'), 30,
-                              (round(vid.get(3) / args.scale), round(vid.get(4) / args.scale)))
+                              cv2.VideoWriter_fourcc(*'mp4v'), args.ofps,
+                              (round(FRAMEX / args.scale), round(FRAMEY / args.scale)))
     else: out = None
 
 
@@ -138,13 +151,17 @@ def main():
         shade = 1.5 * np.ones((int(img.shape[0] / args.scale), int(img.shape[1] / args.scale))).astype("uint8")
         shade[int(YMIN/args.scale):int(YMAX/args.scale),int(XMIN/args.scale):int(XMAX/args.scale)] = 1
 
-        if not args.no_tracker:
-            tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
-                             roi_buffer = (YMAX - YMIN) * 0.02)
 
         # Re-set...
         vid = cv2.VideoCapture(args.input)
 
+    if tracker:
+        if ROI:
+            tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
+                            roi_buffer = (YMAX - YMIN) * args.roi_buffer)
+        else:
+            tracker.set_roi({"xmin" : 0, "xmax" : FRAMEX, "ymin" : 0, "ymax" : FRAMEY},
+                            roi_buffer = FRAMEY * args.roi_buffer)
 
     nframe = 0
     while True:
@@ -159,17 +176,13 @@ def main():
             nframe += 1
             continue
 
-        detections = detector.detect_grid(frame, [XMIN, YMIN, XMAX, YMAX],
-                                          xgrid = args.xgrid, ygrid = args.ygrid)
-
-        if detections:
-            det.write(nframe, detections, args.input.split(".")[0] + "_detector.csv")
+        detections = detector.detect_grid(frame, ROI, xgrid = args.xgrid, ygrid = args.ygrid)
 
         scaled = cv2.resize(frame, None,
                             fx = 1 / args.scale, fy = 1 / args.scale,
                             interpolation = cv2.INTER_AREA)
 
-        if not args.no_tracker:
+        if tracker:
 
             tracker.update(detections)
 
@@ -177,9 +190,29 @@ def main():
                 tracker.track(frame)
                 tracker.reset_track(frame)
 
-            tracker.draw(scaled, scale = args.scale)
-
         if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
+
+        if args.show_heat: 
+
+            if not nframe % 10:
+                mask, heat= detector.heatmap(size = scaled.shape[:2], scale = args.scale, xmin = 50)
+
+            if nframe >= args.heat_fade: heat_frac = args.heat_frac
+            else: heat_frac = args.heat_frac * nframe / args.heat_fade
+
+            if not ROI:
+                scaled[mask] = (scaled[mask] * (1 - heat_frac) + heat[mask] * heat_frac).astype("uint8")
+            else:
+
+                YMINS, YMAXS = int(YMIN/args.scale), int(YMAX/args.scale)
+                XMINS, XMAXS = int(XMIN/args.scale), int(XMAX/args.scale)
+
+                scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] = \
+                    (scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_frac) + \
+                     heat[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_frac).astype("uint8")
+
+        if tracker: tracker.draw(scaled, scale = args.scale)
+        else: detector.draw(scaled, scale = args.scale, width = 1, color = (255, 255, 255))
 
         if args.view:
 
@@ -188,8 +221,8 @@ def main():
 
         if out is not None:
 
-            scaled = cv2.putText(scaled, "{:05d}".format(nframe), org = (120, 120),
-                                fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2,
+            scaled = cv2.putText(scaled, "{:05d}".format(nframe), org = (int(FRAMEX*0.02 / args.scale), int(FRAMEY*0.98 / args.scale)),
+                                fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEX / args.scale > 600 else 1,
                                 color = (255, 255, 255), thickness = 2)
 
             out.write(scaled)
@@ -201,8 +234,10 @@ def main():
 
     if out is not None: out.release()
 
-    if not args.no_tracker:
-        tracker.write(args.input.split(".")[0] + "_tracker.csv")
+    detector.write(args.input.replace("mov", "mp4").replace(".mp4", "_det.csv"))
+
+    if tracker:
+        tracker.write(args.input.replace("mov", "mp4").replace(".mp4", "_tr.csv"))
 
 
 

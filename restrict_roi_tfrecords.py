@@ -136,6 +136,7 @@ for example in parsed_dataset:
                 # Write it if, in the rescaled image space, of 300x300, it exceeds plim pixels.
                 box_area = (new_xmax - new_xmin) * (new_ymax - new_ymin)
                 if (box_area / image_size) > (args.plim / 300 / 300): 
+                    print((new_xmin, new_ymin), (new_xmax,new_ymax))
                     train.update_dict_coords(output_dict, class_num, label, (new_xmin, new_ymin), (new_xmax,new_ymax))
 
         if output_dict["classes"]:

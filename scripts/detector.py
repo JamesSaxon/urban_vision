@@ -5,19 +5,18 @@ import pandas as pd
 from edgetpu.detection.engine import DetectionEngine
 from edgetpu.utils import dataset_utils
 
+from scipy.ndimage import gaussian_filter
+
 from PIL import Image
 
 
-def bbox_intersection(objA, objB):
-
-    xminA, yminA, xmaxA, ymaxA = objA.bounding_box.flatten()
-    xminB, yminB, xmaxB, ymaxB = objB.bounding_box.flatten()
+def bbox_intersection(A, B):
 
     # coordinates of the intersection rectangle
-    xmin = max(xminA, xminB)
-    ymin = max(yminA, yminB)
-    xmax = min(xmaxA, xmaxB)
-    ymax = min(ymaxA, ymaxB)
+    xmin = max(A.xmin, B.xmin)
+    ymin = max(A.ymin, B.ymin)
+    xmax = min(A.xmax, B.xmax)
+    ymax = min(A.ymax, B.ymax)
 
     # compute the area of intersection rectangle
     intersection = max(0, xmax - xmin) * max(0, ymax - ymin)
@@ -26,74 +25,34 @@ def bbox_intersection(objA, objB):
 
 def max_fractional_intersection(objA, objB):
 
-    intx_area = bbox_intersection(objA, objB)
+    intx_area = bbox_intersection(objA.box, objB.box)
 
-    xminA, yminA, xmaxA, ymaxA = objA.bounding_box.flatten()
-    xminB, yminB, xmaxB, ymaxB = objB.bounding_box.flatten()
-
-    area_A = (xmaxA - xminA) * (ymaxA - yminA)
-    area_B = (xmaxB - xminB) * (ymaxB - yminB)
-
-    return max(intx_area / area_A, intx_area / area_B)
+    return max(intx_area / objA.area, intx_area / objB.area)
 
 
-def flag_duplicates(raw_detections, max_overlap = 0.25, labels = None):
+def remove_duplicates(detections, max_overlap = 0.25, match_labels = False, labels = None):
 
     duplicates = []
-    for io, iobj in enumerate(raw_detections):
+    for io, iobj in enumerate(detections):
 
-        i_label = iobj.label_id
-        if i_label in [2, 5, 7]: i_label = -1
-
-        for jo, jobj in enumerate(raw_detections[io+1:]):
+        for jo, jobj in enumerate(detections[io+1:]):
 
             jo += io + 1
 
-            if labels is not None and iobj.label_id not in labels: continue
-
-            j_label = iobj.label_id
-            if j_label in [2, 5, 7]: j_label = -1
-
-            if i_label != j_label: continue
+            if match_labels and (iobj.label != jobj.label): continue
 
             intx_frac = max_fractional_intersection(iobj, jobj)
 
             if intx_frac > max_overlap:
 
-                duplicates.append(io if iobj.score < jobj.score else jo)
+                duplicates.append(io if iobj.conf < jobj.conf else jo)
 
-    return duplicates
+    
+    for d in sorted(list(set(duplicates)), reverse = True): 
+        detections.pop(d)
 
+    return 
 
-def write(frame_id, det_list, file_name):
-
-    out_df = pd.DataFrame(columns=['frame', 'x', 'y', 'xmin', 'ymin', 'xmax', 'ymax', 'area', 'label', 'conf'])
-    x, y, xmin, ymin, xmax, ymax, area, label, conf = [], [], [], [], [], [], [], [], []
-
-    for detection in det_list:
-
-        x.append(detection.x)
-        y.append(detection.x)
-        xmin.append(detection.box.xmin)
-        ymin.append(detection.box.ymin)
-        xmax.append(detection.box.xmax)
-        ymax.append(detection.box.ymax)
-        area.append(detection.area)
-        label.append(detection.label)
-        conf.append(detection.conf)
-
-    out_df['x'] = x
-    out_df['y'] = y
-    out_df['xmin'] = xmin
-    out_df['ymin'] = ymin
-    out_df['xmax'] = xmax
-    out_df['ymax'] = ymax
-    out_df['area'] = area
-    out_df['label'] = label
-    out_df['conf'] = conf
-    out_df['frame'] = frame_id
-
-    out_df.to_csv(file_name, header=False, mode='a')
 
 class BBox():
 
@@ -142,9 +101,10 @@ class BBox():
 class Detection():
 
     colors = {"person" : (0, 0, 255),
-              "car" : (0, 255, 255), "bus" : (0, 255), "truck" : (255, 0, 0)}
+              "car" : (0, 255, 255), "bus" : (0, 255), "truck" : (255, 0, 0),
+              "dog" : (255, 0, 255), "bike" : (125, 255, 255), "stroller" : (125, 125, 255)}
 
-    def __init__(self, xy, box = None, conf = None, label = None, color = None):
+    def __init__(self, xy, box = None, conf = None, label = None, frame_id = None, color = None):
 
         self.xy    = xy
         self.x     = xy[0]
@@ -159,6 +119,8 @@ class Detection():
 
         self.conf  = conf
         self.label = label
+
+        self.frame = frame_id
 
         if   color is not None: self.color = color
         elif label is not None: self.color = Detection.colors[label]
@@ -211,11 +173,52 @@ class Detector():
 
         self.verbose = verbose
 
+        self.frame = 0
 
-    def detect(self, frame, roi = None, return_image = False):
+        self.detections = []
+        self.all_detections = []
 
-        if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
-        else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
+        self.has_world_geometry = False
+
+
+
+    def set_world_geometry(self, geofile, inv_binsize = 10):
+
+        self.has_world_geometry = True
+
+        self.inv_binsize = inv_binsize
+
+        localized = pd.read_csv(geofile)
+
+        localized[["xp", "yp"]] = localized[["xp", "yp"]].astype(float)
+
+        self.geo_xmin, self.geo_xmax = localized.x.min(), localized.x.max()
+        self.geo_ymin, self.geo_ymax = localized.y.min(), localized.y.max()
+
+        self.geo_xrange = self.geo_xmax - self.geo_xmin
+        self.geo_yrange = self.geo_ymax - self.geo_ymin
+
+        localized.dropna(inplace = True)
+
+        localized["x"] -= self.geo_xmin
+        localized["y"] -= self.geo_ymin
+
+        src     = localized[["xp", "yp"]].values
+        dst     = localized[["x",  "y" ]].values 
+        dst_inv = localized[["x",  "y" ]].values * inv_binsize
+
+        self.geo_homography = cv2.findHomography(src, dst)[0]
+        self.geo_inv_homography = np.linalg.pinv(cv2.findHomography(src, dst_inv)[0])
+
+
+
+    def detect(self, frame, roi = None, frame_id = None):
+
+        self.frame += 1
+        if frame_id is None: frame_id = self.frame 
+
+        if roi: roi_xmin, roi_xmax, roi_ymin, roi_ymax = roi
+        else:   roi_xmin, roi_xmax, roi_ymin, roi_ymax = 0, frame.shape[1], 0, frame.shape[0]
 
         range_x = roi_xmax - roi_xmin
         range_y = roi_ymax - roi_ymin
@@ -225,9 +228,7 @@ class Detector():
         raw_detections = self.engine.detect_with_image(image, threshold = self.thresh,
                                             keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
 
-        duplicates = flag_duplicates(raw_detections, labels = self.ncategs, max_overlap = self.max_overlap)
-
-        det_list = []
+        self.detections = []
 
         for iobj, obj in enumerate(raw_detections):
 
@@ -253,19 +254,6 @@ class Detector():
             box[3] += roi_ymin
             draw_box = box.astype(int)
 
-            is_duplicate = iobj in duplicates
-
-            if return_image:
-
-                color = Detector.colors[self.categs.index(label)] if len(self.categs) else (255, 255, 255)
-
-                if is_duplicate: color = tuple([int((c + 255)/2) for c in color])
-                width = 2 if is_duplicate else 4
-
-                cv2.rectangle(frame, tuple(draw_box[:2]), tuple(draw_box[2:]), color, width)
-
-            if is_duplicate: continue
-
             box_xmin, box_ymin, box_xmax, box_ymax = box
 
             if self.hloc == "left":   x = box_xmax
@@ -276,21 +264,25 @@ class Detector():
             if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
             if self.vloc == "lower":  y = box_ymax
 
-            det_list.append(Detection((x,y), box_dict, obj.score, label))
-
             box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
 
-            det_list.append(Detection((x,y), box_dict, obj.score, label))
+            det = Detection((x,y), box_dict, obj.score, label, frame_id)
+            if det.area > self.min_area: self.detections.append(det)
 
-        if return_image: return det_list, frame
+        remove_duplicates(self.detections, labels = self.ncategs, max_overlap = self.max_overlap)
 
-        return det_list
+        self.all_detections.extend(self.detections)
+
+        return self.detections
 
 
-    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, return_image = False, overlap = 0.1):
+    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, overlap = 0.1, frame_id = None):
 
-        if roi: roi_xmin, roi_ymin, roi_xmax, roi_ymax = roi
-        else:   roi_xmin, roi_ymin, roi_xmax, roi_ymax = 0, 0, frame.shape[1], frame.shape[0]
+        self.frame += 1
+        if frame_id is None: frame_id = self.frame 
+
+        if roi: roi_xmin, roi_xmax, roi_ymin, roi_ymax = roi
+        else:   roi_xmin, roi_xmax, roi_ymin, roi_ymax = 0, frame.shape[1], 0, frame.shape[0]
 
         range_x = roi_xmax - roi_xmin
         range_y = roi_ymax - roi_ymin
@@ -303,6 +295,7 @@ class Detector():
         if xgrid != 1:
             xoverlap = int(overlap*(roi_xmax-roi_xmin)/xgrid)
         else: xoverlap = 0
+
         if ygrid != 1:
             yoverlap = int(overlap*(roi_ymax-roi_ymin)/ygrid)
         else: yoverlap = 0
@@ -310,25 +303,22 @@ class Detector():
         subroi_list = []
         for i in range(xgrid):
             for j in range(ygrid):
+
                 xmax = int(xvals[i+1])
                 ymax = int(yvals[j+1])
-                if i == 0:
-                    xmin = int(xvals[i])
-                else:
-                    xmin = int(xvals[i] - xoverlap)
-                if j == 0:
-                    ymin = int(yvals[j])
-                else:
-                    ymin = int(yvals[j] - yoverlap)
 
-                subroi_list.append([xmin,
-                                    xmax,
-                                    ymin,
-                                    ymax])
+                if i == 0: xmin = int(xvals[i])
+                else:      xmin = int(xvals[i] - xoverlap)
 
-        det_list = []
+                if j == 0: ymin = int(yvals[j])
+                else:      ymin = int(yvals[j] - yoverlap)
+
+                subroi_list.append([xmin, xmax, ymin, ymax])
+
+        self.detections = []
 
         for subroi in subroi_list:
+
             subroi_xmin, subroi_xmax, subroi_ymin, subroi_ymax = subroi
             subroi_range_x = subroi_xmax - subroi_xmin 
             subroi_range_y = subroi_ymax - subroi_ymin 
@@ -339,7 +329,6 @@ class Detector():
             raw_detections = self.engine.detect_with_image(subimage, threshold = self.thresh,
                                                 keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
 
-            duplicates = flag_duplicates(raw_detections, labels = self.ncategs, max_overlap = self.max_overlap)
             for iobj, obj in enumerate(raw_detections):
 
                 # If the label is irrelevant, just get out.
@@ -364,19 +353,6 @@ class Detector():
 
                 draw_box = box.astype(int)
 
-                is_duplicate = iobj in duplicates
-
-                if return_image:
-
-                    color = Detector.colors[self.categs.index(label)] if len(self.categs) else (255, 255, 255)
-
-                    if is_duplicate: color = tuple([int((c + 255)/2) for c in color])
-                    width = 2 if is_duplicate else 4
-
-                    cv2.rectangle(frame, tuple(draw_box[:2]), tuple(draw_box[2:]), color, width)
-
-                if is_duplicate: continue
-
                 box_xmin, box_ymin, box_xmax, box_ymax = box
 
                 if self.hloc == "left":   x = box_xmax
@@ -389,75 +365,167 @@ class Detector():
 
                 box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
 
-                det = Detection((x,y), box_dict, obj.score, label)
-                if det.area > self.min_area: det_list.append(det)
+                det = Detection((x,y), box_dict, obj.score, label, frame_id)
+                if det.area > self.min_area: self.detections.append(det)
+
+        remove_duplicates(self.detections, labels = self.ncategs, max_overlap = self.max_overlap)
+
+        self.all_detections.extend(self.detections)
+
+        return self.detections
 
 
-        if return_image: return det_list, frame
+    def draw(self, frame, scale, width = 1, color = (255, 255, 255)):
 
-        return det_list
+        for d in self.detections:
 
-
-    def detect_objects(self, frame, scale=4, kernel=60//4, panels=False,
-                        box_size=300, top_k=3, view=False, gauss=True,
-                        return_areas = False, return_confs = False):
-        #Apply background subtraction
-        if not kernel % 2: kernel +=1
-        scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale, interpolation = cv2.INTER_AREA)
-        mog = self.bkd.apply(scaled)
+            d.box.draw_rectangle(frame, scale, color = (255, 255, 255), width = 1)
 
 
-        mog[mog < 129] = 0
-        if gauss: mog = cv2.GaussianBlur(mog, (kernel, kernel), 0)
-        mog[mog < 50] = 0
-        mog_mask = ((mog > 128) * 255).astype("uint8")
+    def write(self, file_name):
+    
+        df = pd.DataFrame([{"frame": d.frame, "x" : d.x, "y" : d.y, "area" : d.area, "conf" : d.conf, "label" : d.label,
+                            "xmin" : d.box.xmin, "xmax" : d.box.xmax, "ymin" : d.box.ymin, "ymax" : d.box.ymax}
+                           for d in self.all_detections])
 
-        #Find contours
-        img = frame
-        if panels: areas_inferenced = set()
-        _, contours, _ = cv2.findContours(mog_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        positions = []
-        areas = []
-        confs = []
+        df = df[["frame", "conf", "label", "x", "y", "area", "xmin", "xmax", "ymin", "ymax"]]
 
-        #Iterate through contours, set ROI, and detect
-        contour_area_threshold = 300/scale
-        for c in contours:
-            if cv2.contourArea(c) < contour_area_threshold: continue
-            #Calculate bounding box
-            x, y, w, h = cv2.boundingRect(c)
-            if panels:
-                x_mid = (x + w//2)*scale
-                y_mid = (y + h//2)*scale
-                grid_square = (x_mid//(box_size - 50), y_mid//(box_size - 50))
-                if grid_square in areas_inferenced: continue
-                areas_inferenced.add(grid_square)
-                xmin = max((box_size - 50)*grid_square[0] - 50, 0)
-                xmax = xmin + box_size + 100
-                ymin = max((box_size - 50)*grid_square[1] - 50, 0)
-                ymax = ymin + box_size + 100
-            else:
-                width = max(box_size,w*2*scale)
-                height = max(box_size,h*2*scale)
-                x_mid = (x + w//2)*scale
-                y_mid = (y + h//2)*scale
-                xmin = max(0,x_mid - width//2)
-                xmax = x_mid + width//2
-                ymin = max(0,y_mid - height//2)
-                ymax = y_mid + height//2
-            roi = (xmin, ymin, xmax, ymax)
-            #if view: cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (255, 255, 0), 2)
+        df.sort_values(by = ["frame", "conf"]).to_csv(file_name, float_format = "%.3f", header = True, index = False)
 
-            #Run inference
-            if view:
-                pos, ar, con, img = self.detect_roi(frame, roi=roi, view=view,
-                                                    return_areas = True,
-                                                    return_confs = True)
-            else:
-                pos, ar, con = self.detect_roi(frame, roi=roi, view=view,
-                                               return_areas = True,
-                                               return_confs = True)
-            positions.extend(pos)
-            areas.extend(ar)
-            confs.extend(con)
-        return np.array(positions), np.array(areas), np.array(confs), img
+
+    def naive_heatmap(self, size, scale, blur, quantile, cmap, xmin = None):
+
+        img = np.zeros(size)
+
+        xy = np.array([[det.x / scale, det.y / scale] 
+                       for det in self.all_detections])[np.newaxis].astype(int)
+        
+        for x, y in xy:
+
+            if xmin is not None and x < xmin: continue
+
+            img[y, x] += 1
+        
+        img8 = np.where(img > np.quantile(img, quantile), 255, 
+                        255 * img / img.max()).astype("uint8")
+
+        img8_blur = cv2.GaussianBlur(img8, (blur, blur), 0)
+        img_col = cv2.applyColorMap(img8_blur, cmap)
+
+        mask = np.ones(size).astype(bool)
+        
+        return (mask, img_col)
+        
+
+    def projected_heatmap(self, size, scale, blur, quantile, cmap):
+
+        if not self.all_detections: 
+            return np.ones(size).astype(bool), np.zeros((size[0], size[1], 3)).astype("uint8")
+
+        xy = np.array([[det.x / scale, det.y / scale] 
+                       for det in self.all_detections])[np.newaxis]
+
+        xyW = cv2.perspectiveTransform(xy, self.geo_homography).reshape(-1, 2)
+        
+        img = np.zeros((int(self.geo_yrange * self.inv_binsize),
+                        int(self.geo_xrange * self.inv_binsize)))
+        
+        for x, y in (self.inv_binsize * xyW).astype(int):
+            
+            if x < 0: continue
+            if y < 0: continue
+            if x >= img.shape[1]: continue
+            if y >= img.shape[0]: continue
+            
+            img[y,x] += 1
+            
+        img = gaussian_filter(img, blur)
+        
+        max_val = max(np.quantile(img, quantile), 1)
+        img8 = np.where(img > max_val, 255, 255. * img / max_val).astype("uint8")
+        
+        img8_col = cv2.applyColorMap(img8, cv2.COLORMAP_PARULA)
+        img8_col = cv2.warpPerspective(img8_col, self.geo_inv_homography, dsize = (size[1], size[0]))
+
+        mask = np.ones((int(self.geo_yrange * self.inv_binsize),
+                        int(self.geo_xrange * self.inv_binsize))) * 255
+
+        mask = cv2.warpPerspective(mask.astype("uint8"), self.geo_inv_homography, dsize = (size[1], size[0]))
+        mask = mask > 0
+
+        return mask, img8_col
+
+        
+
+    def heatmap(self, size, scale = 1, blur = 1, quantile = 0.99, cmap = cv2.COLORMAP_PARULA, xmin = 0):
+
+        if not self.has_world_geometry: return self.naive_heatmap(size, scale, blur, quantile, cmap, xmin)
+        else: return self.projected_heatmap(size, scale, blur, quantile, cmap)
+        
+
+
+    ##  def detect_objects(self, frame, scale=4, kernel=60//4, panels=False,
+    ##                      box_size=300, top_k=3, view=False, gauss=True,
+    ##                      return_areas = False, return_confs = False):
+    ##      #Apply background subtraction
+    ##      if not kernel % 2: kernel +=1
+    ##      scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale, interpolation = cv2.INTER_AREA)
+    ##      mog = self.bkd.apply(scaled)
+
+
+    ##      mog[mog < 129] = 0
+    ##      if gauss: mog = cv2.GaussianBlur(mog, (kernel, kernel), 0)
+    ##      mog[mog < 50] = 0
+    ##      mog_mask = ((mog > 128) * 255).astype("uint8")
+
+    ##      #Find contours
+    ##      img = frame
+    ##      if panels: areas_inferenced = set()
+    ##      _, contours, _ = cv2.findContours(mog_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    ##      positions = []
+    ##      areas = []
+    ##      confs = []
+
+    ##      #Iterate through contours, set ROI, and detect
+    ##      contour_area_threshold = 300/scale
+    ##      for c in contours:
+    ##          if cv2.contourArea(c) < contour_area_threshold: continue
+    ##          #Calculate bounding box
+    ##          x, y, w, h = cv2.boundingRect(c)
+    ##          if panels:
+    ##              x_mid = (x + w//2)*scale
+    ##              y_mid = (y + h//2)*scale
+    ##              grid_square = (x_mid//(box_size - 50), y_mid//(box_size - 50))
+    ##              if grid_square in areas_inferenced: continue
+    ##              areas_inferenced.add(grid_square)
+    ##              xmin = max((box_size - 50)*grid_square[0] - 50, 0)
+    ##              xmax = xmin + box_size + 100
+    ##              ymin = max((box_size - 50)*grid_square[1] - 50, 0)
+    ##              ymax = ymin + box_size + 100
+    ##          else:
+    ##              width = max(box_size,w*2*scale)
+    ##              height = max(box_size,h*2*scale)
+    ##              x_mid = (x + w//2)*scale
+    ##              y_mid = (y + h//2)*scale
+    ##              xmin = max(0,x_mid - width//2)
+    ##              xmax = x_mid + width//2
+    ##              ymin = max(0,y_mid - height//2)
+    ##              ymax = y_mid + height//2
+    ##          roi = (xmin, ymin, xmax, ymax)
+    ##          #if view: cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (255, 255, 0), 2)
+
+    ##          #Run inference
+    ##          if view:
+    ##              pos, ar, con, img = self.detect_roi(frame, roi=roi, view=view,
+    ##                                                  return_areas = True,
+    ##                                                  return_confs = True)
+    ##          else:
+    ##              pos, ar, con = self.detect_roi(frame, roi=roi, view=view,
+    ##                                             return_areas = True,
+    ##                                             return_confs = True)
+    ##          positions.extend(pos)
+    ##          areas.extend(ar)
+    ##          confs.extend(con)
+    ##      return np.array(positions), np.array(areas), np.array(confs), img
+
+

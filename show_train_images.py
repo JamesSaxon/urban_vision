@@ -1,3 +1,5 @@
+#!/usr/bin/env python 
+
 import cv2
 import tensorflow as tf
 import numpy as np
@@ -39,12 +41,14 @@ for example in parsed_dataset:
         xmax = int(example['image/object/bbox/xmax'].numpy().astype(float)[i]*image_width)
         ymin = int(example['image/object/bbox/ymin'].numpy().astype(float)[i]*image_height)
         ymax = int(example['image/object/bbox/ymax'].numpy().astype(float)[i]*image_height)
-        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (255, 255, 0), 2)
+        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (255, 255, 0), 1)
         cv2.putText(image, label, (xmin, ymin), cv2.FONT_HERSHEY_SIMPLEX,
                    1, (255,255,0), 2)
-    title = 'Frame ' + example['image/source_id'].numpy().decode("utf-8")
-    cv2.putText(image, title, (int(image_width*0.4), image_height - 10), cv2.FONT_HERSHEY_SIMPLEX,
-               2, (255,0,255), 3)
+
+    frame = example['image/source_id'].numpy().decode("utf-8")
+    print(frame, image.shape, image_width, image_height)
+    cv2.putText(image, frame, (10, image_height - 10), cv2.FONT_HERSHEY_SIMPLEX,
+               1, (255,0,255), 2)
     cv2.imshow("image", image)
     cv2.waitKey(0)
     cv2.waitKey(10)

@@ -67,13 +67,11 @@ def create_tf_example(example):
     image_format = str.encode('jpg')
     encoded_image_data = example['image_encoded']
 
-    xmins = list(np.array(example['xmins'])/width) # List of normalized left x coordinates in bounding box (1 per box)
-
-    xmaxs = list(np.array(example['xmaxs'])/width) # List of normalized right x coordinates in bounding box
-             # (1 per box)
+    xmins = list(np.array(example['xmins'])/width)  # List of normalized left x coordinates in bounding box (1 per box)
+    xmaxs = list(np.array(example['xmaxs'])/width)  # List of normalized right x coordinates in bounding box (1 per box)
     ymins = list(np.array(example['ymins'])/height) # List of normalized top y coordinates in bounding box (1 per box)
-    ymaxs = list(np.array(example['ymaxs'])/height) # List of normalized bottom y coordinates in bounding box
-             # (1 per box)
+    ymaxs = list(np.array(example['ymaxs'])/height) # List of normalized bottom y coordinates in bounding box (1 per box)
+
     classes_text = []
     for label in example['classes_text']:
         classes_text.append(label.encode('utf-8')) # List of string class name of bounding box (1 per box)

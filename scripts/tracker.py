@@ -38,7 +38,9 @@ class Object():
         self.area = []
         self.conf = []
         self.ts   = []
+
         self.missing = 0
+        self.edge_strikes = 0
 
         self.box = None
 
@@ -226,9 +228,13 @@ class Object():
         self.active = False
         self.t_deactive = t
 
+        self.tracker = None
+
 
 
 class Tracker():
+
+    STRIKES = 1
 
     def __init__(self, 
                  max_missing = 4, max_distance = 50, 
@@ -334,8 +340,11 @@ class Tracker():
 
             if not o.active: continue
 
+            if self.edge_veto(o.box): o.edge_strikes += 1
+
             if self.t - o.last_detection > self.MAX_MISSING or \
-               o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer):
+               o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer) or \
+               o.edge_strikes > Tracker.STRIKES: 
                 o.deactivate(self.t)
 
 
@@ -497,8 +506,10 @@ class Tracker():
             self.objects[obj_idx].update(det, self.t, ts = ts)
 
             # And remove if necessary.
-            if self.edge_veto(det.box):
-                self.objects[obj_idx].deactivate(self.t)
+            ##  if self.edge_veto(det.box):
+            ##      self.objects[obj_idx].deactivate(self.t)
+            # Although ... deactivate_objects will do this for the point.
+            # and we won't *create* new objects in the veto region...
             
 
         # The new_indexes are not yet new -- just potential/unmatched.
