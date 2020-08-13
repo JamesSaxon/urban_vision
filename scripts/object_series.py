@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import argparse
 import platform
@@ -16,7 +16,7 @@ from edgetpu.utils import dataset_utils
 
 from glob import glob
 
-import sys, tqdm
+import sys 
 
 import pandas as pd
 
@@ -31,6 +31,7 @@ def main():
     parser.add_argument('--model', default = "../models/mobilenet_ssd_v1_coco_quant_postprocess_edgetpu.tflite", help = "The tflite model")
     parser.add_argument('--labels', default = "../models/coco_labels.txt", help='Path of the labels file.')
     parser.add_argument('--input', help = 'Directory of input images.', required=True)
+    parser.add_argument('--output', help = 'Name of output file, by default derived from input name.', default = "")
     parser.add_argument('-k', default = 50, type = int)
     parser.add_argument('--thresh', default = 0.4, type = float)
     parser.add_argument("--categs", default = [], nargs = "+")
@@ -99,8 +100,10 @@ def main():
 
     if not args.no_output:
 
-        out = cv2.VideoWriter(args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4"),
-                              cv2.VideoWriter_fourcc(*'mp4v'), args.ofps,
+        if args.output: output = args.output
+        else: output = args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4")
+
+        out = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*'mp4v'), args.ofps,
                               (round(FRAMEX / args.scale), round(FRAMEY / args.scale)))
     else: out = None
 
