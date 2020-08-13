@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse
+import configargparse
 import platform
 import subprocess
 
@@ -27,48 +27,67 @@ colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 def main():
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', default = "../models/mobilenet_ssd_v1_coco_quant_postprocess_edgetpu.tflite", help = "The tflite model")
-    parser.add_argument('--labels', default = "../models/coco_labels.txt", help='Path of the labels file.')
-    parser.add_argument('--input', help = 'Directory of input images.', required=True)
-    parser.add_argument('--output', help = 'Name of output file, by default derived from input name.', default = "")
-    parser.add_argument('-k', default = 50, type = int)
-    parser.add_argument('--thresh', default = 0.4, type = float)
-    parser.add_argument("--categs", default = [], nargs = "+")
-    parser.add_argument("--frames", default = 0, type = int)
-    parser.add_argument("--skip", default = 0, type = int)
-    parser.add_argument("--predict_matches", default = False, action = "store_true")
-    parser.add_argument("--max_missing", default = 5, type = int)
-    parser.add_argument("--min_distance_or", default = 0.4, type = float)
-    parser.add_argument("--max_distance", default = 1.0, type = float)
-    parser.add_argument("--max_track", default = 0, type = int)
-    parser.add_argument("--max_overlap", default = 0.25, type = float)
-    parser.add_argument("--candidate_obs", default = 5, type = float)
-    parser.add_argument("--contrail", default = 25, type = int)
-    parser.add_argument("--select_roi", default = False, action = "store_true")
-    parser.add_argument("--roi", default = [], type = float, nargs = 4)
-    parser.add_argument("--xgrid", default = 1, type = int)
-    parser.add_argument("--ygrid", default = 1, type = int)
-    parser.add_argument("--roi_loc", default = "upper center", type = str)
-    parser.add_argument("--edge_veto", default = 0.005, type = float, help = "Veto detections within this fractional distance of the edge of a (sub) ROI when DETECTING.")
-    parser.add_argument("--roi_buffer", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, within this fractional distance of the ROI, when TRACKING.")
-    parser.add_argument("--min_area", default = 0, type = float)
-    parser.add_argument("--view", default = False, action = "store_true")
-    parser.add_argument("--scale", default = 1, type = float)
-    parser.add_argument("--verbose", default = False, action = "store_true")
-    parser.add_argument("--no_output", default = False, action = "store_true")
-    parser.add_argument("--kalman", default = 50, type = int, help = "Scale of Kalman error covariance in pixels.")
-    parser.add_argument("--no_tracker", default = False, action = "store_true")
-    parser.add_argument("--ofps", default = 30, type = int)
+    parser = configargparse.ArgParser(default_config_files = ['./stream_defaults.conf'])
+    parser.add('-c', '--config', required = False, is_config_file = True, help = 'Path for config file.')
 
-    parser.add_argument("--show_heat", action = "store_true", default = False)
-    parser.add_argument("--heat_frac", type = float, default = 0.5)
-    parser.add_argument("--heat_fade", type = int, default = 0)
-    parser.add_argument("--geometry", type = str, default = "")
+    ## Basic inputs
+    parser.add('-i', '--input', help = 'Directory of input images.', required=True)
+    parser.add('-o', '--output', help = 'Name of output file, by default derived from input name.', default = "")
 
-    parser.add_argument('--keep_aspect_ratio', default = False, dest='keep_aspect_ratio', action='store_true',)
+    ## What to process
+    parser.add("-f", "--frames", default = 0, type = int, help = "Total number of frames to process")
+    parser.add("--skip", default = 0, type = int, help = "Skip deeper into a stream (useful for debugging)")
+
+    ## Model / Detection Engine
+    parser.add('--model', required = True, help = "The tflite model")
+    parser.add('--labels', required = True, help='Path of the labels file.')
+    parser.add('--thresh', default = 0.4, type = float, help = "Confidence level of detections")
+    parser.add("--categs", default = ["car"], nargs = "+", help = "Types of objects to process -- must match labels")
+    parser.add('--max_det_items', default = 50, type = int, help = "'k' parameter of max detections, for engine.")
+
+    ## Detector Parameters
+    parser.add("--select_roi", default = False, action = "store_true", help = "Interactively re-select the ROI.")
+    parser.add("--roi", default = [], type = float, nargs = 4, help = "xmin, xmax, ymin, ymax")
+    parser.add("--xgrid", default = 1, type = int, help = "Number of times to subdivide the detection ROI horizontally.")
+    parser.add("--ygrid", default = 1, type = int, help = "Number of times to subdivide the detection ROI vertically.")
+    parser.add("--roi_loc", default = "upper center", type = str, help = "Location on a detection bounding box to use.")
+    parser.add("--max_overlap", default = 0.25, type = float, help = "Maximum that detections can overlap, as max(A_i / Intersection).")
+    parser.add("--min_area", default = 0, type = float, help = "Minimum size of a detection.")
+    parser.add("--edge_veto", default = 0.005, type = float, help = "Veto detections within this fractional distance of the edge of a (sub) ROI when DETECTING.")
+    parser.add("--roi_buffer", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, within this fractional distance of the ROI, when TRACKING.")
+
+    ## Tracker Parameters
+    parser.add("--max_missing", default = 5, type = int, help = "Number of frames that an object can go missing, before being deleted.")
+    parser.add("--max_distance", default = 1.0, type = float, help = "Maximum distance that an object can move as a proportion of sqrt(A)")
+    parser.add("--min_distance_or", default = 0.4, type = float, help = "Minimum distance between detections, in units of sqrt(A).")
+    parser.add("--no_tracker", default = False, action = "store_true", help = "Whether to turn off the tracker.")
+    parser.add("--predict_matches", default = False, action = "store_true", help = "Do or do not use Kalman filtering to predict new match locations.")
+    parser.add("--max_track", default = 0, type = int, help = "How many frames to track an object, using correlational tracking.")
+    parser.add("--candidate_obs", default = 5, type = float, help = "Number of frames to privilege earlier objects.")
+
+    ## Visualization
+    parser.add("--kalman", default = 50, type = int, help = "Scale of Kalman error covariance in pixels.")
+    parser.add("--contrail", default = 25, type = int, help = "Number of frames to view objects' past locations")
+    parser.add("--scale", default = 1, type = float, help = "Factor by which to reduce the output size.")
+    parser.add("--view", default = False, action = "store_true", help = "View the feed 'live' (or not)")
+    parser.add("--no_output", default = False, action = "store_true", help = "Do not record the stream.")
+    parser.add("--ofps", default = 30, type = int, help = "Output frames per second.")
+
+    parser.add("--show_heat", action = "store_true", default = False, help = "Whether to show a projected geometry heat map.")
+    parser.add("--heat_frac", type = float, default = 0.5, help = "Max alpha value")
+    parser.add("--heat_fade", type = int, default = 0, help = "Number of frames, to 'fade in' geometry")
+    parser.add("--geometry", type = str, default = "", help = "Filename of geometry, to calculate projection matrix.")
+
+    parser.add("--verbose", default = False, action = "store_true", help = "")
 
     args = parser.parse_args()
+
+    print(args)
+    print("----------")
+    print(parser.format_help())
+    print("----------")
+    print(parser.format_values())    # useful for logging where different settings came from
+
 
     # Initialize engine.
     vid = cv2.VideoCapture(args.input)
@@ -76,7 +95,7 @@ def main():
     FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
 
     detector = det.Detector(model = args.model, labels = args.labels,
-                            categs = args.categs, thresh = args.thresh, k = args.k,
+                            categs = args.categs, thresh = args.thresh, k = args.max_det_items,
                             max_overlap = args.max_overlap,
                             loc = args.roi_loc, edge_veto = args.edge_veto,
                             min_area = args.min_area,
@@ -98,10 +117,13 @@ def main():
 
     vid = cv2.VideoCapture(args.input)
 
+
     if not args.no_output:
 
+        output = args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4")
+
+        ## But if it's explicit, use that.
         if args.output: output = args.output
-        else: output = args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4")
 
         out = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*'mp4v'), args.ofps,
                               (round(FRAMEX / args.scale), round(FRAMEY / args.scale)))
@@ -214,15 +236,20 @@ def main():
                     (scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_frac) + \
                      heat[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_frac).astype("uint8")
 
-        if tracker: tracker.draw(scaled, scale = args.scale)
-        else: detector.draw(scaled, scale = args.scale, width = 1, color = (255, 255, 255))
 
+        ##  Visualize.  If tracker is running, use it; otherwise let the detector.
+        if tracker: tracker.draw(scaled, scale = args.scale)
+        else:       detector.draw(scaled, scale = args.scale, width = 1, color = (255, 255, 255))
+
+
+        ##  View it, if relevant.
         if args.view:
 
             cv2.imshow("view", scaled)
             if (cv2.waitKey(1) & 0xff) == 27: break
 
-        if out is not None:
+        ##  Write it, if the stream has not been turned off.
+        if not args.no_output:
 
             scaled = cv2.putText(scaled, "{:05d}".format(nframe), org = (int(FRAMEX*0.02 / args.scale), int(FRAMEY*0.98 / args.scale)),
                                 fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEX / args.scale > 600 else 1,
@@ -235,12 +262,12 @@ def main():
         nframe += 1
 
 
-    if out is not None: out.release()
+    ## Finalize all outputs -- video stream, detector, and tracker.
+    if not args.no_output:
 
-    detector.write(args.input.replace("mov", "mp4").replace(".mp4", "_det.csv"))
-
-    if tracker:
-        tracker.write(args.input.replace("mov", "mp4").replace(".mp4", "_tr.csv"))
+        out.release()
+        detector.write(output.replace(".mp4", "_det.csv"))
+        if tracker: tracker.write(output.replace(".mp4", "_tr.csv"))
 
 
 
