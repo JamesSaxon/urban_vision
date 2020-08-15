@@ -1,4 +1,6 @@
-* [Build opencv](https://www.pyimagesearch.com/2019/09/16/install-opencv-4-on-raspberry-pi-4-and-raspbian-buster/) 4.2.0 on the rpi (slow!)
+* Build opencv 4.2.0 from [this](https://www.pyimagesearch.com/2019/09/16/install-opencv-4-on-raspberry-pi-4-and-raspbian-buster/) or [that](https://qengineering.eu/install-opencv-4.2-on-raspberry-pi-4.html) on the rpi (slow!)
+  * Carefull about the packages -- it will sort of work, but be missing e.g. linear algebra or the gui, if you miss dependencies!
+  * Also see [this issue](https://github.com/opencv/opencv/issues/12957) for BLAS/LAPACK, but change `x86_64` to `arm-linux-gnueabihf`, for the pi processor.
 * [Install TF](https://coral.ai/docs/accelerator/get-started/)... ah no, my scripts are built with [edgetpu full](https://coral.ai/docs/edgetpu/api-intro/#install-the-library-and-examples):
    ```
    sudo apt-get install python3-edgetpu edgetpu-examples
