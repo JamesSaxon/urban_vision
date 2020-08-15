@@ -16,7 +16,9 @@ from edgetpu.utils import dataset_utils
 
 from glob import glob
 
-import sys 
+import sys
+
+from tqdm import tqdm
 
 import pandas as pd
 
@@ -25,18 +27,197 @@ import tracker as tr, detector as det
 colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 
-def main():
+def get_roi(vinput, scale, roi, select_roi = False): 
+
+    vid = cv2.VideoCapture(vinput)
+
+    FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
+
+    ROI = []
+    if select_roi or len(roi):
+
+        ret, img = vid.read()
+
+        if not ret:
+            print("Video file '{}' is not valid.".format(vinput))
+            sys.exit()
+
+        if select_roi:
+
+            if scale != 1:
+                img = cv2.resize(img, None, fx = 1 / scale, fy = 1 / scale)
+
+            ROI = cv2.selectROI(img)
+            cv2.destroyWindow("ROI selector")
+
+            ROI = [int(x * scale) for x in ROI]
+
+            XMIN, XMAX = ROI[0], ROI[0] + ROI[2]
+            YMIN, YMAX = ROI[1], ROI[1] + ROI[3]
+
+            print(XMIN / FRAMEX, XMAX / FRAMEX, YMIN / FRAMEY, YMAX / FRAMEY)
+
+        else:
+
+            XMIN = int(FRAMEX * roi[0])
+            XMAX = int(FRAMEX * roi[1])
+            YMIN = int(FRAMEY * roi[2])
+            YMAX = int(FRAMEY * roi[3])
+
+        ROI = [XMIN, XMAX, YMIN, YMAX]
+
+    else: 
+
+        ROI = [0, FRAMEX, 0, FRAMEY]
+        vid.release()
+
+    return ROI
+
+
+def main(vinput, output, 
+         nframes, nskip,
+         model, labels, thresh, categs, max_det_items,
+         roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer,
+         no_tracker, match_method, max_missing, max_distance, min_distance_or,
+         predict_matches, kalman_track, max_track, candidate_obs,
+         kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, ofps,
+         show_heat, heat_frac, heat_fade, geometry, verbose, 
+         select_roi, config):
+
+
+    ##  Open the input video file...
+    vid = cv2.VideoCapture(vinput)
+    
+    FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
+
+    ##  Shape parameters.
+    ROI = roi
+    XMIN,  XMAX,  YMIN,  YMAX  = ROI
+    XMINS, XMAXS, YMINS, YMAXS = [int(v/scale) for v in ROI]
+
+
+    ##  And the output video file.
+    video_out = None
+    if not no_video_output:
+
+        video_out = cv2.VideoWriter(output + "_det.mp4", cv2.VideoWriter_fourcc(*'mp4v'), ofps,
+                                    (round(FRAMEX / scale), round(FRAMEY / scale)))
+
+        if pretty_video:
+
+            shade = 1.5 * np.ones((round(FRAMEX / scale), round(FRAMEY / scale))).astype("uint8")
+            shade[YMINS:YMAXS,XMINS:XMAXS] = 1
+
+
+    ##  Build the detector, including the TF engine.
+    detector = det.Detector(model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
+                            max_overlap = max_overlap, loc = roi_loc, edge_veto = edge_veto, min_area = min_area, verbose = False)
+
+    if geometry and show_heat: detector.set_world_geometry(geometry)
+
+    ##  And finally, the tracker.
+    tracker = None
+    if not no_tracker:
+        tracker = tr.Tracker(method = match_method, roi_loc = roi_loc,
+                             max_missing = max_missing, candidate_obs = candidate_obs, max_track = max_track, 
+                             max_distance = max_distance, min_distance_overlap = min_distance_or,
+                             predict_match_locations = predict_matches, kalman_track_cov = kalman_track, 
+                             kalman_viz_cov = kalman_viz, contrail = contrail)
+
+        tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
+                        roi_buffer = (YMAX - YMIN) * roi_buffer)
+
+
+    nframe = 0
+    pbar = tqdm(total = nframes)
+    while True:
+
+        ret, frame = vid.read()
+
+        if not ret or nframe >= nframes:
+            break
+
+        if nframe < nskip:
+            nframe += 1
+            continue
+
+        detections = detector.detect_grid(frame, ROI, xgrid = xgrid, ygrid = ygrid)
+        if tracker: tracker.update(detections, frame = frame if max_track else None)
+
+        if view or video_out:
+
+            scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale)
+
+            ##  Visualize.  If tracker is running, use it; otherwise let the detector do it.
+            if tracker: scaled = tracker .draw(scaled, scale = scale)
+            else:       scaled = detector.draw(scaled, scale = scale, width = 1, color = (255, 255, 255))
+
+            ##  Cut out the detection region.
+            if ROI:
+
+                if pretty_video: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
+                else: scaled = cv2.rectangle(scaled, tuple((XMINS, YMINS)), tuple((XMAXS, YMAXS)), (0, 0, 0), 3)
+
+            if show_heat: 
+
+                if not nframe % 10:
+                    mask, heat = detector.heatmap(size = scaled.shape[:2], scale = scale, xmin = 50)
+
+                if nframe >= heat_fade: heat_frac = heat_frac
+                else: heat_frac = heat_frac * nframe / heat_fade
+
+                if not ROI:
+                    scaled[mask] = (scaled[mask] * (1 - heat_frac) + heat[mask] * heat_frac).astype("uint8")
+
+                else:
+                    scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] = \
+                        (scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_frac) + \
+                         heat  [YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_frac).astype("uint8")
+
+            ##  Write it, if the stream has not been turned off.
+            scaled = cv2.putText(scaled, "{:05d}".format(nframe), org = (int(FRAMEX*0.02 / scale), int(FRAMEY*0.98 / scale)),
+                                 fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEX / scale > 600 else 1,
+                                 color = (255, 255, 255), thickness = 2)
+
+            ##  View it, if relevant.
+            if view:
+
+                cv2.imshow("view", scaled)
+                if (cv2.waitKey(1) & 0xff) == 27: break
+
+            ##  Otherwise write it out.
+            if video_out: video_out.write(scaled)
+
+        nframe += 1
+        pbar.update()
+
+    pbar.close()
+
+
+    ## Finalize all outputs -- video stream, detector, and tracker.
+    if not no_video_output: video_out.release()
+
+    if not no_output:
+
+        detector.write(output + "_det.csv")
+
+        if tracker: tracker.write(output + "_tr.csv")
+
+
+
+
+if __name__ == '__main__':
 
     parser = configargparse.ArgParser(default_config_files = ['./stream_defaults.conf'])
     parser.add('-c', '--config', required = False, is_config_file = True, help = 'Path for config file.')
 
     ## Basic inputs
-    parser.add('-i', '--input', help = 'Directory of input images.', required=True)
+    parser.add('-i', '--vinput', help = 'Directory of input images.', required=True)
     parser.add('-o', '--output', help = 'Name of output file, by default derived from input name.', default = "")
 
     ## What to process
-    parser.add("-f", "--frames", default = 0, type = int, help = "Total number of frames to process")
-    parser.add("--skip", default = 0, type = int, help = "Skip deeper into a stream (useful for debugging)")
+    parser.add("-f", "--nframes", default = float("inf"), type = float, help = "Total number of frames to process")
+    parser.add("--nskip", default = 0, type = int, help = "Skip deeper into a stream (useful for debugging)")
 
     ## Model / Detection Engine
     parser.add('--model', required = True, help = "The tflite model")
@@ -57,20 +238,24 @@ def main():
     parser.add("--roi_buffer", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, within this fractional distance of the ROI, when TRACKING.")
 
     ## Tracker Parameters
+    parser.add("--no_tracker", default = False, action = "store_true", help = "Whether to turn off the tracker.")
+    parser.add("--match_method", default = "min_cost", type = str, choices = ["min_cost", "greedy"], help = "Method for associating objects between frames.")
     parser.add("--max_missing", default = 5, type = int, help = "Number of frames that an object can go missing, before being deleted.")
     parser.add("--max_distance", default = 1.0, type = float, help = "Maximum distance that an object can move as a proportion of sqrt(A)")
     parser.add("--min_distance_or", default = 0.4, type = float, help = "Minimum distance between detections, in units of sqrt(A).")
-    parser.add("--no_tracker", default = False, action = "store_true", help = "Whether to turn off the tracker.")
     parser.add("--predict_matches", default = False, action = "store_true", help = "Do or do not use Kalman filtering to predict new match locations.")
+    parser.add("--kalman_track", default = 0, type = int, help = "Scale of Kalman error covariance in pixels for feed-forward tracking.")
     parser.add("--max_track", default = 0, type = int, help = "How many frames to track an object, using correlational tracking.")
     parser.add("--candidate_obs", default = 5, type = float, help = "Number of frames to privilege earlier objects.")
 
     ## Visualization
-    parser.add("--kalman", default = 50, type = int, help = "Scale of Kalman error covariance in pixels.")
+    parser.add("--kalman_viz", default = 0, type = int, help = "Scale of Kalman error covariance in pixels for vizualization.")
     parser.add("--contrail", default = 25, type = int, help = "Number of frames to view objects' past locations")
     parser.add("--scale", default = 1, type = float, help = "Factor by which to reduce the output size.")
     parser.add("--view", default = False, action = "store_true", help = "View the feed 'live' (or not)")
-    parser.add("--no_output", default = False, action = "store_true", help = "Do not record the stream.")
+    parser.add("--no_output", default = False, action = "store_true", help = "Do not record ANY outputs -- csv or mp4.")
+    parser.add("--no_video_output", default = False, action = "store_true", help = "Do not record the stream.")
+    parser.add("--pretty_video", default = False, action = "store_true", help = "Shade out the un-detected space.")
     parser.add("--ofps", default = 30, type = int, help = "Output frames per second.")
 
     parser.add("--show_heat", action = "store_true", default = False, help = "Whether to show a projected geometry heat map.")
@@ -78,198 +263,21 @@ def main():
     parser.add("--heat_fade", type = int, default = 0, help = "Number of frames, to 'fade in' geometry")
     parser.add("--geometry", type = str, default = "", help = "Filename of geometry, to calculate projection matrix.")
 
-    parser.add("--verbose", default = False, action = "store_true", help = "")
+    parser.add("-v", "--verbose", default = False, action = "store_true", help = "")
 
     args = parser.parse_args()
 
-    print(args)
-    print("----------")
-    print(parser.format_help())
-    print("----------")
-    print(parser.format_values())    # useful for logging where different settings came from
+    if args.verbose: print(parser.format_values()) ## Where did the settings come from!?
 
+    if args.no_output: args.no_video_output = True
 
-    # Initialize engine.
-    vid = cv2.VideoCapture(args.input)
+    if not args.output: # if it's not defined, get it from the input file.
+        args.output = args.vinput.replace(".gif", "").replace(".mov", "").replace(".mp4", "")
 
-    FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
+    args.roi = get_roi(args.vinput, args.scale, args.roi, args.select_roi)
 
-    detector = det.Detector(model = args.model, labels = args.labels,
-                            categs = args.categs, thresh = args.thresh, k = args.max_det_items,
-                            max_overlap = args.max_overlap,
-                            loc = args.roi_loc, edge_veto = args.edge_veto,
-                            min_area = args.min_area,
-                            verbose = False)
-
-    if args.geometry and args.show_heat:
-        detector.set_world_geometry(args.geometry)
-
-    tracker = None
-    if not args.no_tracker:
-        tracker = tr.Tracker(max_missing = args.max_missing,
-                             max_distance = args.max_distance,
-                             min_distance_overlap= args.min_distance_or,
-                             max_track = args.max_track,
-                             candidate_obs = args.candidate_obs,
-                             predict_match_locations = args.predict_matches,
-                             kalman_cov = args.kalman,
-                             contrail = args.contrail, roi_loc = args.roi_loc)
-
-    vid = cv2.VideoCapture(args.input)
-
-
-    if not args.no_output:
-
-        output = args.input.replace("gif", "mov").replace("mov", "mp4").replace(".mp4", "_det.mp4")
-
-        ## But if it's explicit, use that.
-        if args.output: output = args.output
-
-        out = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*'mp4v'), args.ofps,
-                              (round(FRAMEX / args.scale), round(FRAMEY / args.scale)))
-    else: out = None
-
-
-    ROI = []
-    if args.select_roi or len(args.roi):
-
-        ret, img = vid.read()
-        vid.release()
-
-        if not ret:
-            print("Video file not valid")
-            sys.exit()
-
-        print("frame size", img.shape[1], img.shape[0])
-
-        if args.select_roi:
-
-            if args.scale != 1:
-                scaled = cv2.resize(img, None,
-                                    fx = 1 / args.scale, fy = 1 / args.scale,
-                                    interpolation = cv2.INTER_AREA)
-            else:
-                scaled = img
-
-            ROI = cv2.selectROI(scaled)
-            cv2.destroyWindow("ROI selector")
-
-            ROI = [int(x * args.scale) for x in ROI]
-
-            XMIN, XMAX = ROI[0], ROI[0] + ROI[2]
-            YMIN, YMAX = ROI[1], ROI[1] + ROI[3]
-
-            print(XMIN / img.shape[1],
-                  XMAX / img.shape[1],
-                  YMIN / img.shape[0],
-                  YMAX / img.shape[0])
-
-        else:
-
-            XMIN = int(img.shape[1] * args.roi[0])
-            XMAX = int(img.shape[1] * args.roi[1])
-            YMIN = int(img.shape[0] * args.roi[2])
-            YMAX = int(img.shape[0] * args.roi[3])
-
-        ROI = [XMIN, XMAX, YMIN, YMAX]
-
-        shade = 1.5 * np.ones((int(img.shape[0] / args.scale), int(img.shape[1] / args.scale))).astype("uint8")
-        shade[int(YMIN/args.scale):int(YMAX/args.scale),int(XMIN/args.scale):int(XMAX/args.scale)] = 1
-
-
-        # Re-set...
-        vid = cv2.VideoCapture(args.input)
-
-    if tracker:
-        if ROI:
-            tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
-                            roi_buffer = (YMAX - YMIN) * args.roi_buffer)
-        else:
-            tracker.set_roi({"xmin" : 0, "xmax" : FRAMEX, "ymin" : 0, "ymax" : FRAMEY},
-                            roi_buffer = FRAMEY * args.roi_buffer)
-
-    nframe = 0
-    while True:
-
-        ret, frame = vid.read()
-
-        print(nframe, end = " ", flush = True)
-
-        if not ret: break
-        if args.frames and nframe > args.frames: break
-        if nframe < args.skip:
-            nframe += 1
-            continue
-
-        detections = detector.detect_grid(frame, ROI, xgrid = args.xgrid, ygrid = args.ygrid)
-
-        scaled = cv2.resize(frame, None,
-                            fx = 1 / args.scale, fy = 1 / args.scale,
-                            interpolation = cv2.INTER_AREA)
-
-        if tracker:
-
-            tracker.update(detections)
-
-            if args.max_track:
-                tracker.track(frame)
-                tracker.reset_track(frame)
-
-        if ROI: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
-
-        if args.show_heat: 
-
-            if not nframe % 10:
-                mask, heat= detector.heatmap(size = scaled.shape[:2], scale = args.scale, xmin = 50)
-
-            if nframe >= args.heat_fade: heat_frac = args.heat_frac
-            else: heat_frac = args.heat_frac * nframe / args.heat_fade
-
-            if not ROI:
-                scaled[mask] = (scaled[mask] * (1 - heat_frac) + heat[mask] * heat_frac).astype("uint8")
-            else:
-
-                YMINS, YMAXS = int(YMIN/args.scale), int(YMAX/args.scale)
-                XMINS, XMAXS = int(XMIN/args.scale), int(XMAX/args.scale)
-
-                scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] = \
-                    (scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_frac) + \
-                     heat[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_frac).astype("uint8")
-
-
-        ##  Visualize.  If tracker is running, use it; otherwise let the detector.
-        if tracker: tracker.draw(scaled, scale = args.scale)
-        else:       detector.draw(scaled, scale = args.scale, width = 1, color = (255, 255, 255))
-
-
-        ##  View it, if relevant.
-        if args.view:
-
-            cv2.imshow("view", scaled)
-            if (cv2.waitKey(1) & 0xff) == 27: break
-
-        ##  Write it, if the stream has not been turned off.
-        if not args.no_output:
-
-            scaled = cv2.putText(scaled, "{:05d}".format(nframe), org = (int(FRAMEX*0.02 / args.scale), int(FRAMEY*0.98 / args.scale)),
-                                fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEX / args.scale > 600 else 1,
-                                color = (255, 255, 255), thickness = 2)
-
-            out.write(scaled)
-
-        if args.verbose: print('Recorded frame {}'.format(nframe))
-
-        nframe += 1
-
-
-    ## Finalize all outputs -- video stream, detector, and tracker.
-    if not args.no_output:
-
-        out.release()
-        detector.write(output.replace(".mp4", "_det.csv"))
-        if tracker: tracker.write(output.replace(".mp4", "_tr.csv"))
+    main(**vars(args))
 
 
 
 
-if __name__ == '__main__': main()

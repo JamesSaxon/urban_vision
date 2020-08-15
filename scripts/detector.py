@@ -141,8 +141,6 @@ class Detector():
                  loc = "upper center", edge_veto = 0, verbose = False):
 
 
-        print("Loading", model, labels)
-
         self.engine = DetectionEngine(model)
         self.labels = dataset_utils.read_label_file(labels) if labels else None
 

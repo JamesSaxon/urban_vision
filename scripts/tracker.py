@@ -30,7 +30,7 @@ class Object():
     kalman_observation = [[1, 0, 0, 0], [0, 0, 1, 0]]
 
 
-    def __init__(self, id, color = None, kalman_cov = 1):
+    def __init__(self, id, color = None, kalman_track_cov = 0):
 
         self.id = id
 
@@ -57,7 +57,7 @@ class Object():
         self.nobs = 0
         self.active = True
 
-        self.kalman_cov = kalman_cov
+        self.kalman_track_cov = kalman_track_cov
 
 
     def make_kalman(self):
@@ -67,7 +67,7 @@ class Object():
         self.kalman = KalmanFilter(transition_matrices = Object.kalman_transition,
                                    observation_matrices = Object.kalman_observation,
                                    initial_state_mean = initial_state_mean,
-                                   observation_covariance = np.eye(2) * self.kalman_cov)
+                                   observation_covariance = np.eye(2) * self.kalman_track_cov)
 
         self.kf_means = [self.xyt[0][0], 0, self.xyt[0][1], 0]
         self.kf_covs  = [0, 0, 0, 0]
@@ -237,11 +237,14 @@ class Tracker():
     STRIKES = 1
 
     def __init__(self, 
+                 method = "min_cost",
                  max_missing = 4, max_distance = 50, 
                  min_distance_overlap = 0.02,
                  max_track = 0, candidate_obs = 0,
                  predict_match_locations = False,
-                 kalman_cov = 0, roi_loc = "upper center",
+                 kalman_track_cov = 0, 
+                 kalman_viz_cov = 0, 
+                 roi_loc = "upper center",
                  contrail = 0, color = (255, 255, 255)):
 
         self.oid = 0
@@ -250,7 +253,8 @@ class Tracker():
         self.t = 0
 
         self.predict_match_locations = predict_match_locations
-        self.kalman_cov = kalman_cov
+        self.kalman_track_cov = kalman_track_cov
+        self.kalman_viz_cov = kalman_viz_cov
 
         self.CONTRAIL = contrail
 
@@ -273,6 +277,13 @@ class Tracker():
 
         self.roi = None
         self.roi_buffer = 0
+
+        if method in ["greedy", "min_cost"]:
+            self.method = method
+        else: 
+            print("Match method must be either 'greedy' or 'min_cost'.  {} is neither!\nSetting to min_cost.")
+            self.method = "min_cost"
+
 
         loc = roi_loc.split(" ")
         self.vloc, self.hloc = loc[0], loc[1]
@@ -347,6 +358,10 @@ class Tracker():
                o.edge_strikes > Tracker.STRIKES: 
                 o.deactivate(self.t)
 
+    def match(self, D2, mask_candidates): 
+
+        if   self.method == "greedy":    return self.greedy_matches  (D2, mask_candidates)
+        elif self.method == "min_cost" : return self.min_cost_matches(D2, mask_candidates)
 
     def greedy_matches(self, D2, mask_candidates):
 
@@ -440,7 +455,7 @@ class Tracker():
         return full_matches
 
 
-    def update(self, detections, frame = None, ts = None, method = "min_cost"):
+    def update(self, detections, frame = None, ts = None):
 
         self.t += 1
 
@@ -491,9 +506,7 @@ class Tracker():
         if self.NOBS_CANDIDATE:
             mask_candidates = np.array([self.objects[o].nobs < self.NOBS_CANDIDATE for o in obj_unmatched])[:,np.newaxis]
 
-        if   method == "greedy":    matches = self.greedy_matches  (D2, mask_candidates)
-        elif method == "min_cost" : matches = self.min_cost_matches(D2, mask_candidates)
-        else: raise("Update match method must be either greedy or 'min_cost'.")
+        matches = self.match(D2, mask_candidates)
   
         new_indexes -= set(matches.values())
         for old_idx, new_idx in matches.items():
@@ -600,7 +613,8 @@ class Tracker():
 
             x0, y0, t0 = None, None, None
 
-            xyt = o.xyt if not self.kalman_cov else o.kalman_smooth(kalman_cov = self.kalman_cov, depth = int(1.5 * depth))
+            xyt = o.xyt if not self.kalman_viz_cov \
+                        else o.kalman_smooth(kalman_cov = self.kalman_viz_cov, depth = int(1.5 * depth))
 
             for x1, y1, t1 in xyt:
 
