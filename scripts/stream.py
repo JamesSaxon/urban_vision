@@ -76,20 +76,84 @@ def get_roi(vinput, scale, roi, select_roi = False):
 
     return ROI
 
-global COMPLETE
-COMPLETE = False
-def write_frame_to_stream(q, video_out):
 
-    while not (COMPLETE and q.empty()):
+global COMPLETE_INPUT, COMPLETE_DETECTION, COMPLETE_TRACKING
+COMPLETE_INPUT, COMPLETE_DETECTION, COMPLETE_TRACKING = False, False, False
 
-        try: frame = q.get(timeout = 1)
+def detect_objects_in_frame(qdetector, qtracker, detector, HEAT_FRAC, HEAT_FADE, SCALE):
+
+    while not (COMPLETE_INPUT and qdetector.empty()):
+
+        try: nframe, frame, scaled = qdetector.get(timeout = 1)
         except: continue
 
-        video_out.write(frame)
+        detections = detector.detect_grid(frame)
 
-    q.task_done()
+        if view or video_out:
+        
+            if show_heat: 
 
-    video_out.release()
+                update = not(nframe % 10)
+                heat_level = HEAT_FRAC * min(1, nframe / HEAT_FADE)
+                scaled = detector.draw_heatmap(scaled, heat_level, update = update, scale = SCALE, xmin = 50)
+
+            if draw_detector: scaled = detector.draw(scaled, scale = scale)
+
+        qtracker.put((nframe, frame, scaled, detections))
+
+        qdetector.task_done()
+
+
+def track_objects_in_frame(qtracker, qoutput = None, tracker = None, SCALE = 1):
+
+    while not (COMPLETE_DETECTION and qtracker.empty()):
+
+        try: nframe, frame, scaled, detections = qtracker.get(timeout = 1)
+        except: continue
+
+        ##  Tracker only.
+        if tracker:
+
+            tracker.update(detections, frame)
+
+            if VIEW or VIDEO_OUT: scaled = tracker.draw(scaled, scale = SCALE)
+
+        if qoutput: qoutput.put((nframe, scaled))
+
+        qtracker.task_done()
+
+
+def write_frame_to_stream(q, VIDEO_OUT, FRAMEXS, FRAMEYS, XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, pretty_video = False):
+
+    shade = None
+    if pretty_video:
+
+        shade = 1.5 * np.ones((FRAMEXS, FRAMEYS)).astype("uint8")
+        shade[YMINS:YMAXS,XMINS:XMAXS] = 1
+
+
+    while not (COMPLETE_TRACKING and q.empty()):
+
+        try: nframe, frame = q.get(timeout = 1)
+        except: continue
+
+        ##  Cut out the detection region.
+        if XMINS is not None:
+
+            ##  Either shade the unused portion, or just draw a rectangle.
+            if pretty_video: frame = (frame / shade[:,:,np.newaxis]).astype("uint8")
+            else: frame = cv2.rectangle(frame, tuple((XMINS, YMINS)), tuple((XMAXS, YMAXS)), (0, 0, 0), 3)
+
+        ##  Write it, if the stream has not been turned off.
+        frame = cv2.putText(frame, "{:05d}".format(nframe), org = (int(FRAMEXS*0.02), int(FRAMEYS*0.98)),
+                            fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEXS > 600 else 1,
+                            color = (255, 255, 255), thickness = 2)
+
+        VIDEO_OUT.write(frame)
+
+        q.task_done()
+
+    VIDEO_OUT.release()
 
 
 def main(vinput, output, 
@@ -98,7 +162,7 @@ def main(vinput, output,
          roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer,
          no_tracker, match_method, max_missing, max_distance, min_distance_or,
          predict_matches, kalman_track, max_track, candidate_obs,
-         kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, ofps,
+         draw_detector, kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, ofps,
          show_heat, heat_frac, heat_fade, geometry, verbose, 
          select_roi, config):
 
@@ -111,7 +175,7 @@ def main(vinput, output,
     ##  Shape parameters.
     ROI = roi
     XMIN,  XMAX,  YMIN,  YMAX  = ROI
-    XMINS, XMAXS, YMINS, YMAXS = [int(v/scale) for v in ROI]
+    XMINS, XMAXS, YMINS, YMAXS = [round(v/scale) for v in ROI]
 
 
     ##  And the output video file.
@@ -121,25 +185,32 @@ def main(vinput, output,
         video_out = cv2.VideoWriter(output + "_det.mp4", cv2.VideoWriter_fourcc(*'mp4v'), ofps,
                                     (round(FRAMEX / scale), round(FRAMEY / scale)))
 
-        qproc = queue.Queue(20)
-        output_thread = threading.Thread(target = write_frame_to_stream, args = (qproc, video_out))
-        output_thread.start()
-
-        if pretty_video:
-
-            shade = 1.5 * np.ones((round(FRAMEX / scale), round(FRAMEY / scale))).astype("uint8")
-            shade[YMINS:YMAXS,XMINS:XMAXS] = 1
+        video_queue  = queue.Queue(50)
+        video_thread = threading.Thread(target = write_frame_to_stream, 
+                                        args = (video_queue, video_out, round(FRAMEX / scale), round(FRAMEY / scale), 
+                                                XMINS, XMAXS, YMINS, YMAXS, pretty_video))
+        video_thread.start()
 
 
     ##  Build the detector, including the TF engine.
     detector = det.Detector(model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
                             max_overlap = max_overlap, loc = roi_loc, edge_veto = edge_veto, min_area = min_area, verbose = False)
 
+    detector.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX})
+    detector.set_xgrid(xgrid)
+    detector.set_ygrid(ygrid)
+
+
     if geometry and show_heat: detector.set_world_geometry(geometry)
+
+    detect_queue  = queue.Queue(20)
+    detect_thread = threading.Thread(target = detect_objects_in_frame, args = (detect_queue, detector))
+    detect_thread.start()
 
     ##  And finally, the tracker.
     tracker = None
     if not no_tracker:
+
         tracker = tr.Tracker(method = match_method, roi_loc = roi_loc,
                              max_missing = max_missing, candidate_obs = candidate_obs, max_track = max_track, 
                              max_distance = max_distance, min_distance_overlap = min_distance_or,
@@ -149,6 +220,9 @@ def main(vinput, output,
         tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
                         roi_buffer = (YMAX - YMIN) * roi_buffer)
 
+        ##  track_queue  = queue.Queue(20)
+        ##  track_thread = threading.Thread(target = write_frame_to_stream, args = (video_queue, tracker))
+        ##  track_thread.start()
 
     nframe = 0
     pbar = tqdm(total = nframes)
@@ -163,54 +237,14 @@ def main(vinput, output,
             nframe += 1
             continue
 
-        detections = detector.detect_grid(frame, ROI, xgrid = xgrid, ygrid = ygrid)
-        if tracker: tracker.update(detections, frame)
-
+        ##  Useful throughout...
         if view or video_out:
 
             scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale)
 
-            if show_heat: 
-
-                if not nframe % 10:
-                    mask, heat = detector.heatmap(size = scaled.shape[:2], scale = scale, xmin = 50)
-
-                if nframe >= heat_fade: heat_frac = heat_frac
-                else: heat_frac = heat_frac * nframe / heat_fade
-
-                if not ROI:
-                    scaled[mask] = (scaled[mask] * (1 - heat_frac) + heat[mask] * heat_frac).astype("uint8")
-
-                else:
-                    scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] = \
-                        (scaled[YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_frac) + \
-                         heat  [YMINS:YMAXS,XMINS:XMAXS][mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_frac).astype("uint8")
-
-            ##  Visualize.  If tracker is running, use it; otherwise let the detector do it.
-            if tracker: scaled = tracker .draw(scaled, scale = scale)
-            else:       scaled = detector.draw(scaled, scale = scale, width = 1, color = (255, 255, 255))
-
-            ##  Cut out the detection region.
-            if ROI:
-
-                if pretty_video: scaled = (scaled / shade[:,:,np.newaxis]).astype("uint8")
-                else: scaled = cv2.rectangle(scaled, tuple((XMINS, YMINS)), tuple((XMAXS, YMAXS)), (0, 0, 0), 3)
-
-
-            ##  Write it, if the stream has not been turned off.
-            scaled = cv2.putText(scaled, "{:05d}".format(nframe), org = (int(FRAMEX*0.02 / scale), int(FRAMEY*0.98 / scale)),
-                                 fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEX / scale > 600 else 1,
-                                 color = (255, 255, 255), thickness = 2)
-
-            ##  View it, if relevant.
-            if view:
-
-                cv2.imshow("view", scaled)
-                if (cv2.waitKey(1) & 0xff) == 27: break
-
-            ##  Otherwise write it out.
-            ## if video_out: video_out.write(scaled)
-            qproc.put((scaled))
+        ## The detect queue will deliver the frame 
+        ##  to the tracking and output queues.
+        detect_queue.put((nframe, frame, scaled))
 
         nframe += 1
         pbar.update()
@@ -221,15 +255,12 @@ def main(vinput, output,
     ## Finalize all outputs -- video stream, detector, and tracker.
     if not no_video_output: 
 
-        global COMPLETE
-        COMPLETE = True
-
-        output_thread.join()
-        video_out.release()
+        COMPLETE_INPUT = True
+        video_thread.join()
 
     if not no_output:
 
-        ## detector.write(output + "_det.csv")
+        detector.write(output + "_det.csv")
 
         if tracker: tracker.write(output + "_tr.csv")
 
@@ -288,6 +319,8 @@ if __name__ == '__main__':
     parser.add("--pretty_video", default = False, action = "store_true", help = "Shade out the un-detected space.")
     parser.add("--ofps", default = 30, type = int, help = "Output frames per second.")
 
+    parser.add("--draw_detector", default = False, action = "store_true", help = configargparse.SUPPRESS)
+
     parser.add("--show_heat", action = "store_true", default = False, help = "Whether to show a projected geometry heat map.")
     parser.add("--heat_frac", type = float, default = 0.5, help = "Max alpha value")
     parser.add("--heat_fade", type = int, default = 0, help = "Number of frames, to 'fade in' geometry")
@@ -303,6 +336,9 @@ if __name__ == '__main__':
 
     if not args.output: # if it's not defined, get it from the input file.
         args.output = args.vinput.replace(".gif", "").replace(".mov", "").replace(".mp4", "")
+
+    if args.no_tracker and (not args.no_video_output or args.view): args.draw_detector = True
+    else: args.draw_detector = False
 
     args.roi = get_roi(args.vinput, args.scale, args.roi, args.select_roi)
 

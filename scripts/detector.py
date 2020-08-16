@@ -150,13 +150,18 @@ class Detector():
         self.thresh = thresh
         self.k      = k
 
+        self.roi = None
+        self.xgrid = 1
+        self.ygrid = 1
+
+        self.overlap = 0.1 ## In the grids...
+
         self.max_overlap = max_overlap
         self.min_area = min_area
 
         self.relative_coord = relative_coord
         self.keep_aspect_ratio = keep_aspect_ratio
 
-        self.roi    = None
 
         loc = loc.split(" ")
         self.vloc, self.hloc = loc[0], loc[1]
@@ -178,6 +183,21 @@ class Detector():
 
         self.has_world_geometry = False
 
+    def set_xgrid(self, xgrid):
+
+        self.xgrid = xgrid
+
+    def set_ygrid(self, ygrid):
+
+        self.ygrid = ygrid
+
+    def set_roi(self, roi):
+
+        self.roi = roi
+        self.xmin = roi["xmin"]
+        self.xmax = roi["xmax"]
+        self.ymin = roi["ymin"]
+        self.ymax = roi["ymax"]
 
 
     def set_world_geometry(self, geofile, inv_binsize = 10):
@@ -210,97 +230,39 @@ class Detector():
 
 
 
-    def detect(self, frame, roi = None, frame_id = None):
+    def detect_grid(self, frame, frame_id = None):
 
         self.frame += 1
         if frame_id is None: frame_id = self.frame 
 
-        if roi: roi_xmin, roi_xmax, roi_ymin, roi_ymax = roi
-        else:   roi_xmin, roi_xmax, roi_ymin, roi_ymax = 0, frame.shape[1], 0, frame.shape[0]
-
-        range_x = roi_xmax - roi_xmin
-        range_y = roi_ymax - roi_ymin
-
-        image = Image.fromarray(cv2.cvtColor(frame[roi_ymin:roi_ymax, roi_xmin:roi_xmax], cv2.COLOR_BGR2RGB))
-
-        raw_detections = self.engine.detect_with_image(image, threshold = self.thresh,
-                                            keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
-
-        self.detections = []
-
-        for iobj, obj in enumerate(raw_detections):
-
-            # If the label is irrelevant, just get out.
-            label = None
-            if self.labels is not None and len(self.categs):
-
-                if obj.label_id not in self.ncategs: continue
-                label = self.labels[obj.label_id]
-
-            box = obj.bounding_box.flatten()
-
-            if self.edge_veto > 0:
-                if box[0] / range_x < self.edge_veto:     continue
-                if box[2] / range_x > 1 - self.edge_veto: continue
-                if box[1] / range_y < self.edge_veto:     continue
-                if box[3] / range_y > 1 - self.edge_veto: continue
-
-
-            box[0] += roi_xmin
-            box[2] += roi_xmin
-            box[1] += roi_ymin
-            box[3] += roi_ymin
-            draw_box = box.astype(int)
-
-            box_xmin, box_ymin, box_xmax, box_ymax = box
-
-            if self.hloc == "left":   x = box_xmax
-            if self.hloc == "center": x = (box_xmax + box_xmin) / 2
-            if self.hloc == "right":  x = box_xmin
-
-            if self.vloc == "upper":  y = box_ymin
-            if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
-            if self.vloc == "lower":  y = box_ymax
-
-            box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
-
-            det = Detection((x,y), box_dict, obj.score, label, frame_id)
-            if det.area > self.min_area: self.detections.append(det)
-
-        remove_duplicates(self.detections, labels = self.ncategs, max_overlap = self.max_overlap)
-
-        self.all_detections.extend(self.detections)
-
-        return self.detections
-
-
-    def detect_grid(self, frame, roi = None, xgrid = 1, ygrid = 1, overlap = 0.1, frame_id = None):
-
-        self.frame += 1
-        if frame_id is None: frame_id = self.frame 
-
-        if roi: roi_xmin, roi_xmax, roi_ymin, roi_ymax = roi
-        else:   roi_xmin, roi_xmax, roi_ymin, roi_ymax = 0, frame.shape[1], 0, frame.shape[0]
+        if self.roi: 
+            roi_xmin = self.xmin
+            roi_xmax = self.xmax
+            roi_ymin = self.ymin
+            roi_ymax = self.ymax
+        else:
+            roi_xmin, roi_ymin = 0, 0
+            roi_ymax, roi_xmax = frame.shape[:2]
 
         range_x = roi_xmax - roi_xmin
         range_y = roi_ymax - roi_ymin
 
         #ROI list from grid.
-        xvals = np.linspace(roi_xmin, roi_xmax, xgrid+1)
-        yvals = np.linspace(roi_ymin, roi_ymax, ygrid+1)
+        xvals = np.linspace(roi_xmin, roi_xmax, self.xgrid+1)
+        yvals = np.linspace(roi_ymin, roi_ymax, self.ygrid+1)
 
         #Set number of overlap pixels
-        if xgrid != 1:
-            xoverlap = int(overlap*(roi_xmax-roi_xmin)/xgrid)
+        if self.xgrid != 1:
+            xoverlap = int(self.overlap*(roi_xmax-roi_xmin)/self.xgrid)
         else: xoverlap = 0
 
-        if ygrid != 1:
-            yoverlap = int(overlap*(roi_ymax-roi_ymin)/ygrid)
+        if self.ygrid != 1:
+            yoverlap = int(self.overlap*(roi_ymax-roi_ymin)/self.ygrid)
         else: yoverlap = 0
 
         subroi_list = []
-        for i in range(xgrid):
-            for j in range(ygrid):
+        for i in range(self.xgrid):
+            for j in range(self.ygrid):
 
                 xmax = int(xvals[i+1])
                 ymax = int(yvals[j+1])
@@ -366,11 +328,13 @@ class Detector():
                 det = Detection((x,y), box_dict, obj.score, label, frame_id)
                 if det.area > self.min_area: self.detections.append(det)
 
+
         remove_duplicates(self.detections, labels = self.ncategs, max_overlap = self.max_overlap)
 
         self.all_detections.extend(self.detections)
 
         return self.detections
+
 
 
     def draw(self, frame, scale, width = 1, color = (255, 255, 255)):
@@ -396,7 +360,7 @@ class Detector():
         img = np.zeros(size)
 
         xy = np.array([[det.x / scale, det.y / scale] 
-                       for det in self.all_detections])[np.newaxis].astype(int)
+                       for det in self.all_detections]).astype(int)
         
         for x, y in xy:
 
@@ -455,75 +419,29 @@ class Detector():
 
         
 
-    def heatmap(self, size, scale = 1, blur = 1, quantile = 0.99, cmap = cv2.COLORMAP_PARULA, xmin = 0):
+    def draw_heatmap(self, frame, heat_level = 0.5, update = True, scale = 1,
+                     blur = 1, quantile = 0.99, cmap = cv2.COLORMAP_PARULA, xmin = 0):
 
-        if not self.has_world_geometry: return self.naive_heatmap(size, scale, blur, quantile, cmap, xmin)
-        else: return self.projected_heatmap(size, scale, blur, quantile, cmap)
+        size = frame.shape[:2]
+
+        if update:
+
+            if not self.has_world_geometry: 
+                self.mask, self.heat = self.naive_heatmap(size, scale, blur, quantile, cmap, xmin)
+            else: 
+                self.mask, self.heat = self.projected_heatmap(size, scale, blur, quantile, cmap)
+
+        if not self.roi:
+            frame[self.mask] = (frame[self.mask] * (1 - heat_level) + heat[self.mask] * heat_level).astype("uint8")
+
+        else:
+
+            XMINS, XMAXS, YMINS, YMAXS = [int(v/scale) for v in [self.xmin, self.xmax, self.ymin, self.ymax]]
+
+            frame[YMINS:YMAXS,XMINS:XMAXS][self.mask[YMINS:YMAXS,XMINS:XMAXS]] = \
+                (frame[YMINS:YMAXS,XMINS:XMAXS][self.mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_level) + \
+                 self.heat[YMINS:YMAXS,XMINS:XMAXS][self.mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_level).astype("uint8")
+
+        return frame
         
-
-
-    ##  def detect_objects(self, frame, scale=4, kernel=60//4, panels=False,
-    ##                      box_size=300, top_k=3, view=False, gauss=True,
-    ##                      return_areas = False, return_confs = False):
-    ##      #Apply background subtraction
-    ##      if not kernel % 2: kernel +=1
-    ##      scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale, interpolation = cv2.INTER_AREA)
-    ##      mog = self.bkd.apply(scaled)
-
-
-    ##      mog[mog < 129] = 0
-    ##      if gauss: mog = cv2.GaussianBlur(mog, (kernel, kernel), 0)
-    ##      mog[mog < 50] = 0
-    ##      mog_mask = ((mog > 128) * 255).astype("uint8")
-
-    ##      #Find contours
-    ##      img = frame
-    ##      if panels: areas_inferenced = set()
-    ##      _, contours, _ = cv2.findContours(mog_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    ##      positions = []
-    ##      areas = []
-    ##      confs = []
-
-    ##      #Iterate through contours, set ROI, and detect
-    ##      contour_area_threshold = 300/scale
-    ##      for c in contours:
-    ##          if cv2.contourArea(c) < contour_area_threshold: continue
-    ##          #Calculate bounding box
-    ##          x, y, w, h = cv2.boundingRect(c)
-    ##          if panels:
-    ##              x_mid = (x + w//2)*scale
-    ##              y_mid = (y + h//2)*scale
-    ##              grid_square = (x_mid//(box_size - 50), y_mid//(box_size - 50))
-    ##              if grid_square in areas_inferenced: continue
-    ##              areas_inferenced.add(grid_square)
-    ##              xmin = max((box_size - 50)*grid_square[0] - 50, 0)
-    ##              xmax = xmin + box_size + 100
-    ##              ymin = max((box_size - 50)*grid_square[1] - 50, 0)
-    ##              ymax = ymin + box_size + 100
-    ##          else:
-    ##              width = max(box_size,w*2*scale)
-    ##              height = max(box_size,h*2*scale)
-    ##              x_mid = (x + w//2)*scale
-    ##              y_mid = (y + h//2)*scale
-    ##              xmin = max(0,x_mid - width//2)
-    ##              xmax = x_mid + width//2
-    ##              ymin = max(0,y_mid - height//2)
-    ##              ymax = y_mid + height//2
-    ##          roi = (xmin, ymin, xmax, ymax)
-    ##          #if view: cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (255, 255, 0), 2)
-
-    ##          #Run inference
-    ##          if view:
-    ##              pos, ar, con, img = self.detect_roi(frame, roi=roi, view=view,
-    ##                                                  return_areas = True,
-    ##                                                  return_confs = True)
-    ##          else:
-    ##              pos, ar, con = self.detect_roi(frame, roi=roi, view=view,
-    ##                                             return_areas = True,
-    ##                                             return_confs = True)
-    ##          positions.extend(pos)
-    ##          areas.extend(ar)
-    ##          confs.extend(con)
-    ##      return np.array(positions), np.array(areas), np.array(confs), img
-
 
