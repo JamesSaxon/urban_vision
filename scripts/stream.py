@@ -80,7 +80,8 @@ def get_roi(vinput, scale, roi, select_roi = False):
 global COMPLETE_INPUT, COMPLETE_DETECTION, COMPLETE_TRACKING
 COMPLETE_INPUT, COMPLETE_DETECTION, COMPLETE_TRACKING = False, False, False
 
-def detect_objects_in_frame(qdetector, qtracker, detector, HEAT_FRAC, HEAT_FADE, SCALE):
+def detect_objects_in_frame(qdetector, qtracker, detector, 
+                            DRAW_DETECTOR, SHOW_HEAT, HEAT_FRAC, HEAT_FADE, SCALE):
 
     while not (COMPLETE_INPUT and qdetector.empty()):
 
@@ -89,22 +90,23 @@ def detect_objects_in_frame(qdetector, qtracker, detector, HEAT_FRAC, HEAT_FADE,
 
         detections = detector.detect_grid(frame)
 
-        if view or video_out:
-        
-            if show_heat: 
+        if SHOW_HEAT: 
 
-                update = not(nframe % 10)
-                heat_level = HEAT_FRAC * min(1, nframe / HEAT_FADE)
-                scaled = detector.draw_heatmap(scaled, heat_level, update = update, scale = SCALE, xmin = 50)
+            update = not(nframe % 10)
+            heat_level = HEAT_FRAC * min(1, nframe / HEAT_FADE)
+            scaled = detector.draw_heatmap(scaled, heat_level, update = update, scale = SCALE, xmin = 50)
 
-            if draw_detector: scaled = detector.draw(scaled, scale = scale)
+        # if DRAW_DETECTOR: scaled = detector.draw(scaled, scale = SCALE)
 
         qtracker.put((nframe, frame, scaled, detections))
 
         qdetector.task_done()
 
+    global COMPLETE_DETECTION
+    COMPLETE_DETECTION = True
 
-def track_objects_in_frame(qtracker, qoutput = None, tracker = None, SCALE = 1):
+
+def track_objects_in_frame(qtracker, qvideo, tracker = None, SCALE = 1, DRAW = True):
 
     while not (COMPLETE_DETECTION and qtracker.empty()):
 
@@ -116,26 +118,34 @@ def track_objects_in_frame(qtracker, qoutput = None, tracker = None, SCALE = 1):
 
             tracker.update(detections, frame)
 
-            if VIEW or VIDEO_OUT: scaled = tracker.draw(scaled, scale = SCALE)
+            if DRAW: scaled = tracker.draw(scaled, scale = SCALE)
 
-        if qoutput: qoutput.put((nframe, scaled))
+        if qvideo: qvideo.put((nframe, scaled))
 
         qtracker.task_done()
 
+    global COMPLETE_TRACKING
+    COMPLETE_TRACKING = True
 
-def write_frame_to_stream(q, VIDEO_OUT, FRAMEXS, FRAMEYS, XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, pretty_video = False):
 
+def write_frame_to_stream(video_queue, 
+                          VIDEO_OUT, WRITE, FRAMEXS, FRAMEYS,
+                          XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, pretty_video = False):
     shade = None
     if pretty_video:
 
-        shade = 1.5 * np.ones((FRAMEXS, FRAMEYS)).astype("uint8")
+        shade = 1.5 * np.ones((FRAMEYS, FRAMEXS)).astype("uint8")
         shade[YMINS:YMAXS,XMINS:XMAXS] = 1
 
 
-    while not (COMPLETE_TRACKING and q.empty()):
+    while not (COMPLETE_TRACKING and video_queue.empty()):
 
-        try: nframe, frame = q.get(timeout = 1)
+        try: nframe, frame = video_queue.get(timeout = 1)
         except: continue
+
+        if not WRITE:
+            video_queue.task_done()
+            continue
 
         ##  Cut out the detection region.
         if XMINS is not None:
@@ -151,9 +161,7 @@ def write_frame_to_stream(q, VIDEO_OUT, FRAMEXS, FRAMEYS, XMINS = None, XMAXS = 
 
         VIDEO_OUT.write(frame)
 
-        q.task_done()
-
-    VIDEO_OUT.release()
+        video_queue.task_done()
 
 
 def main(vinput, output, 
@@ -185,11 +193,6 @@ def main(vinput, output,
         video_out = cv2.VideoWriter(output + "_det.mp4", cv2.VideoWriter_fourcc(*'mp4v'), ofps,
                                     (round(FRAMEX / scale), round(FRAMEY / scale)))
 
-        video_queue  = queue.Queue(50)
-        video_thread = threading.Thread(target = write_frame_to_stream, 
-                                        args = (video_queue, video_out, round(FRAMEX / scale), round(FRAMEY / scale), 
-                                                XMINS, XMAXS, YMINS, YMAXS, pretty_video))
-        video_thread.start()
 
 
     ##  Build the detector, including the TF engine.
@@ -200,12 +203,8 @@ def main(vinput, output,
     detector.set_xgrid(xgrid)
     detector.set_ygrid(ygrid)
 
+    if geometry and show_heat: detector.set_world_geometry(geometry, scale = scale)
 
-    if geometry and show_heat: detector.set_world_geometry(geometry)
-
-    detect_queue  = queue.Queue(20)
-    detect_thread = threading.Thread(target = detect_objects_in_frame, args = (detect_queue, detector))
-    detect_thread.start()
 
     ##  And finally, the tracker.
     tracker = None
@@ -220,9 +219,27 @@ def main(vinput, output,
         tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
                         roi_buffer = (YMAX - YMIN) * roi_buffer)
 
-        ##  track_queue  = queue.Queue(20)
-        ##  track_thread = threading.Thread(target = write_frame_to_stream, args = (video_queue, tracker))
-        ##  track_thread.start()
+    # Start the threads -- 
+    detect_queue = queue.Queue(20)
+    track_queue  = queue.Queue(20)
+    video_queue  = queue.Queue(20)
+
+    detect_thread = threading.Thread(target = detect_objects_in_frame,
+                                     args = (detect_queue, track_queue, detector, 
+                                             draw_detector, show_heat and bool(view or video_out),
+                                             heat_frac, heat_fade, scale))
+    detect_thread.start()
+
+    track_thread = threading.Thread(target = track_objects_in_frame, 
+                                    args = (track_queue, video_queue, tracker, scale, bool(view or video_out)))
+    track_thread.start()
+
+    video_thread = threading.Thread(target = write_frame_to_stream, 
+                                    args = (video_queue, video_out, bool(view or video_out),
+                                            round(FRAMEX / scale), round(FRAMEY / scale), 
+                                            XMINS, XMAXS, YMINS, YMAXS, pretty_video))
+    video_thread.start()
+
 
     nframe = 0
     pbar = tqdm(total = nframes)
@@ -252,18 +269,19 @@ def main(vinput, output,
     pbar.close()
 
 
-    ## Finalize all outputs -- video stream, detector, and tracker.
-    if not no_video_output: 
+    global COMPLETE_INPUT
+    COMPLETE_INPUT = True
+    detect_thread.join()
+    track_thread.join()
+    video_thread.join()
 
-        COMPLETE_INPUT = True
-        video_thread.join()
+    ## Finalize all outputs -- video stream, detector, and tracker.
+    if video_out: video_out.release()
 
     if not no_output:
 
         detector.write(output + "_det.csv")
-
         if tracker: tracker.write(output + "_tr.csv")
-
 
 
 

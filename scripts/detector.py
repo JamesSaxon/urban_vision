@@ -200,7 +200,7 @@ class Detector():
         self.ymax = roi["ymax"]
 
 
-    def set_world_geometry(self, geofile, inv_binsize = 10):
+    def set_world_geometry(self, geofile, scale = 1, inv_binsize = 10):
 
         self.has_world_geometry = True
 
@@ -226,8 +226,7 @@ class Detector():
         dst_inv = localized[["x",  "y" ]].values * inv_binsize
 
         self.geo_homography = cv2.findHomography(src, dst)[0]
-        self.geo_inv_homography = np.linalg.pinv(cv2.findHomography(src, dst_inv)[0])
-
+        self.geo_inv_homography = np.linalg.pinv(cv2.findHomography(src / scale, dst_inv)[0])
 
 
     def detect_grid(self, frame, frame_id = None):
@@ -343,6 +342,8 @@ class Detector():
 
             d.box.draw_rectangle(frame, scale, color = (255, 255, 255), width = 1)
 
+        return frame
+
 
     def write(self, file_name):
     
@@ -384,8 +385,7 @@ class Detector():
         if not self.all_detections: 
             return np.ones(size).astype(bool), np.zeros((size[0], size[1], 3)).astype("uint8")
 
-        xy = np.array([[det.x / scale, det.y / scale] 
-                       for det in self.all_detections])[np.newaxis]
+        xy = np.array([[det.x, det.y] for det in self.all_detections])[np.newaxis]
 
         xyW = cv2.perspectiveTransform(xy, self.geo_homography).reshape(-1, 2)
         
@@ -409,10 +409,12 @@ class Detector():
         img8_col = cv2.applyColorMap(img8, cv2.COLORMAP_PARULA)
         img8_col = cv2.warpPerspective(img8_col, self.geo_inv_homography, dsize = (size[1], size[0]))
 
+        # print(self.geo_yrange * self.inv_binsize)
         mask = np.ones((int(self.geo_yrange * self.inv_binsize),
                         int(self.geo_xrange * self.inv_binsize))) * 255
 
-        mask = cv2.warpPerspective(mask.astype("uint8"), self.geo_inv_homography, dsize = (size[1], size[0]))
+        mask = cv2.warpPerspective(mask.astype("uint8"), self.geo_inv_homography,
+                                   dsize = (size[1], size[0]))
         mask = mask > 0
 
         return mask, img8_col
