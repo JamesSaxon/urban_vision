@@ -27,6 +27,8 @@ import tracker as tr, detector as det
 import threading
 import queue
 
+from time import sleep
+
 colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 
@@ -85,7 +87,7 @@ def detect_objects_in_frame(qdetector, qtracker, detector,
 
     while not (COMPLETE_INPUT and qdetector.empty()):
 
-        try: nframe, frame, scaled = qdetector.get(timeout = 1)
+        try: nframe, frame, scaled = qdetector.get(timeout = 0.1)
         except: continue
 
         detections = detector.detect_grid(frame)
@@ -96,7 +98,7 @@ def detect_objects_in_frame(qdetector, qtracker, detector,
             heat_level = HEAT_FRAC * min(1, nframe / HEAT_FADE)
             scaled = detector.draw_heatmap(scaled, heat_level, update = update, scale = SCALE, xmin = 50)
 
-        # if DRAW_DETECTOR: scaled = detector.draw(scaled, scale = SCALE)
+        if DRAW_DETECTOR: scaled = detector.draw(scaled, scale = SCALE)
 
         qtracker.put((nframe, frame, scaled, detections))
 
@@ -110,7 +112,7 @@ def track_objects_in_frame(qtracker, qvideo, tracker = None, SCALE = 1, DRAW = T
 
     while not (COMPLETE_DETECTION and qtracker.empty()):
 
-        try: nframe, frame, scaled, detections = qtracker.get(timeout = 1)
+        try: nframe, frame, scaled, detections = qtracker.get(timeout = 0.1)
         except: continue
 
         ##  Tracker only.
@@ -118,9 +120,9 @@ def track_objects_in_frame(qtracker, qvideo, tracker = None, SCALE = 1, DRAW = T
 
             tracker.update(detections, frame)
 
-            if DRAW: scaled = tracker.draw(scaled, scale = SCALE)
+            scaled = tracker.draw(scaled, scale = SCALE)
 
-        if qvideo: qvideo.put((nframe, scaled))
+        if DRAW: qvideo.put((nframe, scaled))
 
         qtracker.task_done()
 
@@ -140,7 +142,7 @@ def write_frame_to_stream(video_queue,
 
     while not (COMPLETE_TRACKING and video_queue.empty()):
 
-        try: nframe, frame = video_queue.get(timeout = 1)
+        try: nframe, frame = video_queue.get(timeout = 0.1)
         except: continue
 
         if not WRITE:
@@ -188,12 +190,10 @@ def main(vinput, output,
 
     ##  And the output video file.
     video_out = None
-    if not no_video_output:
+    if True or not no_video_output:
 
         video_out = cv2.VideoWriter(output + "_det.mp4", cv2.VideoWriter_fourcc(*'mp4v'), ofps,
                                     (round(FRAMEX / scale), round(FRAMEY / scale)))
-
-
 
     ##  Build the detector, including the TF engine.
     detector = det.Detector(model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
@@ -220,22 +220,25 @@ def main(vinput, output,
                         roi_buffer = (YMAX - YMIN) * roi_buffer)
 
     # Start the threads -- 
-    detect_queue = queue.Queue(20)
-    track_queue  = queue.Queue(20)
-    video_queue  = queue.Queue(20)
+    detect_queue = queue.Queue(50)
+    track_queue  = queue.Queue(50)
+    video_queue  = queue.Queue(50)
+
+    draw_frames = bool(view or not no_video_output)
 
     detect_thread = threading.Thread(target = detect_objects_in_frame,
                                      args = (detect_queue, track_queue, detector, 
-                                             draw_detector, show_heat and bool(view or video_out),
+                                             draw_detector, show_heat and draw_frames,
                                              heat_frac, heat_fade, scale))
     detect_thread.start()
 
     track_thread = threading.Thread(target = track_objects_in_frame, 
-                                    args = (track_queue, video_queue, tracker, scale, bool(view or video_out)))
+                                    args = (track_queue, video_queue, tracker, scale, draw_frames))
     track_thread.start()
 
+
     video_thread = threading.Thread(target = write_frame_to_stream, 
-                                    args = (video_queue, video_out, bool(view or video_out),
+                                    args = (video_queue, video_out, draw_frames,
                                             round(FRAMEX / scale), round(FRAMEY / scale), 
                                             XMINS, XMAXS, YMINS, YMAXS, pretty_video))
     video_thread.start()
@@ -255,9 +258,10 @@ def main(vinput, output,
             continue
 
         ##  Useful throughout...
-        if view or video_out:
-
-            scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale)
+        ##    for reasons *completely* beyond me, this line actually 
+        ##    speeds up the code by about a factor of two, 
+        ##  so I'm doing it even when there is no output
+        scaled = cv2.resize(frame, None, fx = 1 / scale, fy = 1 / scale)
 
         ## The detect queue will deliver the frame 
         ##  to the tracking and output queues.
@@ -273,10 +277,11 @@ def main(vinput, output,
     COMPLETE_INPUT = True
     detect_thread.join()
     track_thread.join()
-    video_thread.join()
 
     ## Finalize all outputs -- video stream, detector, and tracker.
-    if video_out: video_out.release()
+    if not no_video_output:
+        video_thread.join()
+        video_out.release()
 
     if not no_output:
 
