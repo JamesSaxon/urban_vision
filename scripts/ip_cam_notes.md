@@ -7,7 +7,7 @@
 
 * View the current scene, possibly applying a filter:
 	```
-	ffplay -hide_banner -i rtsp://jsaxon:passwd@192.168.1.67/1 -vf "crop=2*iw/3:3*ih/8:0:3*ih/8"
+	ffplay -hide_banner -i rtsp://admin:passwd@192.168.1.67/1 -vf "crop=2*iw/3:3*ih/8:0:3*ih/8"
 	```
 
 * Just play an old stream
