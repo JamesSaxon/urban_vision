@@ -1,5 +1,10 @@
 ## Common Operations
 
+* Take a picture:
+  ```
+  wget -q http://admin:passwd@192.168.1.67/ISAPI/Streaming/channels/101/picture -O picture_01.jpg
+  ```
+
 * View the current scene, possibly applying a filter:
 	```
 	ffplay -hide_banner -i rtsp://jsaxon:passwd@192.168.1.67/1 -vf "crop=2*iw/3:3*ih/8:0:3*ih/8"
