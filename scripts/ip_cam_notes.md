@@ -29,6 +29,8 @@
      -to 00:05:00 -an -vsync 1 -y out.mp4
 	```
 
+* **Note!!** ffmpeg is MUCH happier if you specify the input rate of the stream.
+
 ### Trying to Download Data:
 
 * I can see file names here, but site is broken (400 errors / bad request):
