@@ -1,6 +1,8 @@
+#!/usr/bin/env python 
+
 import csv
 import argparse
-import os
+import os, sys
 import cv2
 from random import sample
 from random import randint
@@ -9,12 +11,12 @@ import tag
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--video', required=True, help='Path of the video file.')
-parser.add_argument('--records', default=20, help='Number of frames to tag.',
-                        type=int)
-parser.add_argument('--duration', help='Duration of the video in minutes.',
-                        required=True, type=float)
+parser.add_argument('--records', default=20, help='Number of frames to tag.', type=int)
+parser.add_argument('--duration', help='Duration of the video in minutes.', required=True, type=float)
 parser.add_argument('--start', default=0, type=float, help='Minute mark to start tagging.')
+parser.add_argument('--resume', default = False, action = "store_true", help='Start from the last tagged frame.')
 parser.add_argument('--file', help='CSV file that lists objects and letters for tagging')
+parser.add_argument('--no_multitracking', action = "store_true", default = False)
 
 
 args = parser.parse_args()
@@ -68,19 +70,23 @@ print("framerate:", frameRate)
 start_frame = args.start*60.*frameRate
 if args.start > args.duration:
     start_frame = args.start
+if args.resume:
+    start_frame = max(tagged_dict.keys(), key = lambda x: int(x))
 
-frame_set = tag.sample_bins(frames_tagged, num_records, 10, start_frame, int(video_duration*frameRate))
-print("frame_set: ", frame_set)
-'''
+# frame_set = tag.sample_bins(frames_tagged, num_records, 10, start_frame, int(video_duration*frameRate))
 try:
     frame_set = set(sample(range(int(start_frame),
                                  int(video_duration*frameRate)),
                                  num_records))
-    print("frame_set: ", frame_set)
+
+    frame_set = sorted(list(frame_set))
+
 except ValueError:
     print("Sample larger than population or is negative - \
             Choose a different number of frames to tag.")
-'''
+    sys.exit()
+
+print("frame_set: ", len(frame_set), frame_set)
 
 records_count = 0
 num_tagged = 0
@@ -110,7 +116,6 @@ try:
                 fp.close()
 
                 records_count += 1
-                num_tagged += 1
                 frames_tagged.add(frameId)
 
                 #Set tracker bboxes as list of tagged objects
@@ -122,6 +127,8 @@ try:
                                    output_dict['xmaxs'][i] - output_dict['xmins'][i],
                                    output_dict['ymaxs'][i] - output_dict['ymins'][i]))
                     colors.append((randint(0, 255), randint(0, 255), randint(0, 255)))
+
+                if args.no_multitracking: continue
 
                 #Create new multitracker object
                 multiTracker = cv2.MultiTracker_create()
@@ -157,10 +164,11 @@ try:
                     cv2.namedWindow("MultiTracker")
                     cv2.startWindowThread()
                     cv2.imshow('MultiTracker', clone)
-                    #cv2.moveWindow("MultiTracker", -305, -1000)
+                    cv2.moveWindow("MultiTracker", -305, -1000)
                     cv2.waitKey(100)
                     print("Press y to accept this tagged frame.")
                     print("Press x to quit without accepting.")
+                    print("Press r to tag the next frame.")
                     k = cv2.waitKey(0) & 0xFF
                     if (k == 121):  # y is pressed
                         next_output_dict = tag.update_tracked(output_dict,
@@ -180,10 +188,13 @@ try:
                         break
 
                     elif k == ord('r'):
-                        frame_set.add(next_frameId + 1)
+                        print("adding", next_frameId + 1)
+                        frame_set.append(next_frameId + 1)
                         cv2.destroyWindow('MultiTracker')
                         cv2.waitKey(100)
                         break
+  
+        num_tagged = num_records - sum([f > frameId for f in frame_set])
 
 except KeyboardInterrupt:
     print("Tagging interrupted.  Writing out {} records instead of {}.".format(
