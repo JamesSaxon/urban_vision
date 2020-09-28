@@ -463,6 +463,7 @@ class Tracker():
         if not len(detections):
 
             self.deactivate_objects()
+            self.track(frame)
             return
 
 
@@ -489,8 +490,7 @@ class Tracker():
         else:
             obj_unmatched, obj_points = self.get_last_locations(return_unmatched = True)
 
-        # obj_indexes    = {ki : k for ki, k in enumerate(obj_unmatched)}
-        obj_areas      = np.array([self.objects[o].current_area for o in obj_unmatched])
+        obj_areas = np.array([self.objects[o].current_area for o in obj_unmatched])
 
         D2 = cdist(obj_points, new_points, 'sqeuclidean')
 
@@ -544,11 +544,10 @@ class Tracker():
 
 
         self.deactivate_objects()
+        self.track(frame)
 
 
     def reset_track(self, frame = None):
-
-        if not self.MAX_TRACK: return
 
         for tr_idx, oidx in enumerate(self.objects):
 
@@ -570,7 +569,10 @@ class Tracker():
             self.objects[oidx].tracker.init(frame, box.min_and_width())
 
 
-    def track(self, frame, ts = None):
+    def track(self, frame = None, ts = None):
+
+        if frame is None: return
+        if not self.MAX_TRACK: return
 
         for oidx, o in self.objects.items():
 
@@ -591,6 +593,8 @@ class Tracker():
             x, y = new_box.loc(self.hloc, self.vloc)
 
             self.objects[oidx].update_track(x, y, self.t, new_box, ts = ts)
+
+        self.reset_track(frame)
 
 
     def draw(self, img, scale = 1):
