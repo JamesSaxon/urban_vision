@@ -10,7 +10,8 @@ import train
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--file', required=True, help='Path of the tfrecord file.')
+parser.add_argument('--file',  required=True, help='Path of the tfrecord file.')
+parser.add_argument('--scale', type = float, default = 1.0)
 parser.add_argument('--limit', help='Number of frames to show', type = int)
 
 args = parser.parse_args()
@@ -36,7 +37,9 @@ for example in parsed_dataset:
     image_width = example['image/width'].numpy()
     image_height = example['image/height'].numpy()
     labels = example['image/object/class/text'].numpy().astype(str)
+    label_nums = example['image/object/class/label'].numpy()
     for i, label in enumerate(labels):
+        # print(i, label, label_nums[i])
         xmin = int(example['image/object/bbox/xmin'].numpy().astype(float)[i]*image_width)
         xmax = int(example['image/object/bbox/xmax'].numpy().astype(float)[i]*image_width)
         ymin = int(example['image/object/bbox/ymin'].numpy().astype(float)[i]*image_height)
@@ -46,9 +49,12 @@ for example in parsed_dataset:
                    1, (255,255,0), 2)
 
     frame = example['image/source_id'].numpy().decode("utf-8")
-    print(frame, image.shape, image_width, image_height)
     cv2.putText(image, frame, (10, image_height - 10), cv2.FONT_HERSHEY_SIMPLEX,
                1, (255,0,255), 2)
+
+    if args.scale != 1.0:
+        image = cv2.resize(image, None, fx = 1 / args.scale, fy = 1 / args.scale)
+
     cv2.imshow("image", image)
     cv2.waitKey(0)
     cv2.waitKey(10)
