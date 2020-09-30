@@ -177,9 +177,15 @@ def tfrecords_from_stream(video, ouput, N = 100, NSKIP = 10, VAL = 5, show = Fal
     training   = tf.io.TFRecordWriter(ouput + "_train.tfrecord")
     validation = tf.io.TFRecordWriter(ouput + "_val.tfrecord")
 
+    breaker = False
     for ix in tqdm.tqdm(range(N)):
 
-        for xi in range(NSKIP): ret, cv_img = cap.read()
+        for xi in range(NSKIP): 
+            ret, cv_img = cap.read()
+            breaker &= ret
+            
+            if breaker: break
+        if breaker: break
 
         pil_img = cv2pil(cv_img)
         np_img  = np.array(pil_img)
@@ -226,7 +232,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--video',  required = True, type = str)
     parser.add_argument('--output', required = True, type = str)
-    parser.add_argument('--total',  default = 10, help = 'How many frames', type = int)
+    parser.add_argument('--total',  default = 100000, help = 'How many frames', type = int)
     parser.add_argument('--skip',   default = 10, help = "1 in how many?", type = int)
     parser.add_argument('--show',   action = "store_true", default = False)
     args = parser.parse_args()
