@@ -177,20 +177,18 @@ def tfrecords_from_stream(video, ouput, N = 100, NSKIP = 10, VAL = 5, show = Fal
     training   = tf.io.TFRecordWriter(ouput + "_train.tfrecord")
     validation = tf.io.TFRecordWriter(ouput + "_val.tfrecord")
 
-    breaker = False
-    for ix in tqdm.tqdm(range(N)):
+    show_tqdm_bar = 0 if N > 999999 else N
+    for ix in tqdm.tqdm(range(N), total = show_tqdm_bar):
 
         for xi in range(NSKIP): 
             ret, cv_img = cap.read()
-            breaker &= ret
-            
-            if breaker: break
-        if breaker: break
+
+            if not ret: break
+        if not ret: break
 
         pil_img = cv2pil(cv_img)
         np_img  = np.array(pil_img)
         tf_img  = tf.convert_to_tensor(np.expand_dims(np_img, 0), dtype=tf.float32)
-        tf_img8 = tf.cast(tf_img[0], tf.uint8)
 
         detections, predictions_dict, shapes = detect_fn(tf_img)
 
@@ -232,7 +230,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--video',  required = True, type = str)
     parser.add_argument('--output', required = True, type = str)
-    parser.add_argument('--total',  default = 100000, help = 'How many frames', type = int)
+    parser.add_argument('--total',  default = 1000000, help = 'How many frames', type = int)
     parser.add_argument('--skip',   default = 10, help = "1 in how many?", type = int)
     parser.add_argument('--show',   action = "store_true", default = False)
     args = parser.parse_args()
