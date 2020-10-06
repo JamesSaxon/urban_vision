@@ -108,7 +108,7 @@ def detect_objects_in_frame(qdetector, qtracker, detector,
     COMPLETE_DETECTION = True
 
 
-def track_objects_in_frame(qtracker, qvideo, tracker = None, SCALE = 1, DRAW = True):
+def track_objects_in_frame(qtracker, qvideo = None, tracker = None, SCALE = 1):
 
     while not (COMPLETE_DETECTION and qtracker.empty()):
 
@@ -122,7 +122,7 @@ def track_objects_in_frame(qtracker, qvideo, tracker = None, SCALE = 1, DRAW = T
 
             scaled = tracker.draw(scaled, scale = SCALE)
 
-        if DRAW: qvideo.put((nframe, scaled))
+        if qvideo: qvideo.put((nframe, scaled))
 
         qtracker.task_done()
 
@@ -166,7 +166,7 @@ def write_frame_to_stream(video_queue,
         video_queue.task_done()
 
 
-def main(vinput, output, 
+def main(vinput, output, odir,
          nframes, nskip,
          model, labels, thresh, categs, max_det_items,
          roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer,
@@ -190,7 +190,7 @@ def main(vinput, output,
 
     ##  And the output video file.
     video_out = None
-    if True or not no_video_output:
+    if not no_video_output:
 
         video_out = cv2.VideoWriter(output + "_det.mp4", cv2.VideoWriter_fourcc(*'mp4v'), ofps,
                                     (round(FRAMEX / scale), round(FRAMEY / scale)))
@@ -219,12 +219,12 @@ def main(vinput, output,
         tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
                         roi_buffer = (YMAX - YMIN) * roi_buffer)
 
+    draw_frames = bool(view or not no_video_output)
+
     # Start the threads -- 
     detect_queue = queue.Queue(50)
     track_queue  = queue.Queue(50)
-    video_queue  = queue.Queue(50)
-
-    draw_frames = bool(view or not no_video_output)
+    video_queue  = queue.Queue(50) if draw_frames else None
 
     detect_thread = threading.Thread(target = detect_objects_in_frame,
                                      args = (detect_queue, track_queue, detector, 
@@ -233,19 +233,21 @@ def main(vinput, output,
     detect_thread.start()
 
     track_thread = threading.Thread(target = track_objects_in_frame, 
-                                    args = (track_queue, video_queue, tracker, scale, draw_frames))
+                                    args = (track_queue, video_queue, tracker, scale))
     track_thread.start()
 
 
-    video_thread = threading.Thread(target = write_frame_to_stream, 
-                                    args = (video_queue, video_out, draw_frames,
-                                            round(FRAMEX / scale), round(FRAMEY / scale), 
-                                            XMINS, XMAXS, YMINS, YMAXS, pretty_video))
-    video_thread.start()
+    if video_queue:
+
+        video_thread = threading.Thread(target = write_frame_to_stream, 
+                                        args = (video_queue, video_out, draw_frames,
+                                                round(FRAMEX / scale), round(FRAMEY / scale), 
+                                                XMINS, XMAXS, YMINS, YMAXS, pretty_video))
+        video_thread.start()
 
 
     nframe = 0
-    pbar = tqdm(total = nframes)
+    pbar = tqdm(desc = args.vinput, total = nframes)
     while True:
 
         ret, frame = vid.read()
@@ -298,6 +300,7 @@ if __name__ == '__main__':
     ## Basic inputs
     parser.add('-i', '--vinput', help = 'Directory of input images.', required=True)
     parser.add('-o', '--output', help = 'Name of output file, by default derived from input name.', default = "")
+    parser.add('--odir',         help = 'Name of output directory, by default derived from input name.', default = "")
 
     ## What to process
     parser.add("-f", "--nframes", default = float("inf"), type = float, help = "Total number of frames to process")
@@ -358,10 +361,17 @@ if __name__ == '__main__':
     if args.no_output: args.no_video_output = True
 
     if not args.output: # if it's not defined, get it from the input file.
-        args.output = args.vinput.replace(".gif", "").replace(".mov", "").replace(".mp4", "")
+
+        if not args.odir: output = args.vinput
+        else: output = args.odir + "/" + args.vinput.split("/")[-1]
+
+        for f in [".gif", ".mov", ".MOV", ".mp4"]: output = output.replace(f, "")
+        args.output = output
 
     if args.no_tracker and (not args.no_video_output or args.view): args.draw_detector = True
     else: args.draw_detector = False
+
+    if args.nframes <= 0: args.nframes = float("inf")
 
     args.roi = get_roi(args.vinput, args.scale, args.roi, args.select_roi)
 
