@@ -16,7 +16,7 @@ from edgetpu.utils import dataset_utils
 
 from glob import glob
 
-import sys
+import os, sys
 
 from tqdm import tqdm
 
@@ -32,11 +32,30 @@ from time import sleep
 colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 
-def get_roi(vinput, scale, roi, select_roi = False): 
+def get_roi(vinput, scale, roi, roi_file = "", select_roi = False): 
 
     vid = cv2.VideoCapture(vinput)
 
-    FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
+    FRAMEX, FRAMEY = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if roi_file and not os.path.exists(roi_file): 
+        roi_file, select_roi = "", True
+
+    if roi: roi_file = ""
+
+    if roi_file:
+        roi_df = pd.read_csv(roi_file, index_col = "file")
+        if vinput in roi_df.index:
+            ROI = roi_df.loc[vinput].to_dict()
+            ROI = [int(ROI["xmin"] * FRAMEX), 
+                   int(ROI["xmax"] * FRAMEX), 
+                   int(ROI["ymin"] * FRAMEY),
+                   int(ROI["ymax"] * FRAMEY)]
+
+            return ROI
+
+        select_roi = True
+
 
     ROI = []
     if select_roi or len(roi):
@@ -74,7 +93,8 @@ def get_roi(vinput, scale, roi, select_roi = False):
     else: 
 
         ROI = [0, FRAMEX, 0, FRAMEY]
-        vid.release()
+
+    vid.release()
 
     return ROI
 
@@ -131,8 +151,11 @@ def track_objects_in_frame(qtracker, qvideo = None, tracker = None, SCALE = 1):
 
 
 def write_frame_to_stream(video_queue, 
-                          VIDEO_OUT, WRITE, FRAMEXS, FRAMEYS,
+                          VIDEO_OUT, FRAMEXS, FRAMEYS,
                           XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, pretty_video = False):
+
+    VIDEO_OUT = cv2.VideoWriter(VIDEO_OUT, cv2.VideoWriter_fourcc(*'mp4v'), 30, (FRAMEXS, FRAMEYS))
+
     shade = None
     if pretty_video:
 
@@ -145,10 +168,6 @@ def write_frame_to_stream(video_queue,
         try: nframe, frame = video_queue.get(timeout = 0.1)
         except: continue
 
-        if not WRITE:
-            video_queue.task_done()
-            continue
-
         ##  Cut out the detection region.
         if XMINS is not None:
 
@@ -157,13 +176,16 @@ def write_frame_to_stream(video_queue,
             else: frame = cv2.rectangle(frame, tuple((XMINS, YMINS)), tuple((XMAXS, YMAXS)), (0, 0, 0), 3)
 
         ##  Write it, if the stream has not been turned off.
-        frame = cv2.putText(frame, "{:05d}".format(nframe), org = (int(FRAMEXS*0.02), int(FRAMEYS*0.98)),
+        frame = cv2.putText(frame, "{:05d}".format(nframe),
+                            org = (int(FRAMEXS*0.02), int(FRAMEYS*0.10)),
                             fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEXS > 600 else 1,
                             color = (255, 255, 255), thickness = 2)
 
         VIDEO_OUT.write(frame)
 
         video_queue.task_done()
+
+    VIDEO_OUT.release()
 
 
 def main(vinput, output, odir,
@@ -172,15 +194,15 @@ def main(vinput, output, odir,
          roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer,
          no_tracker, match_method, max_missing, max_distance, min_distance_or,
          predict_matches, kalman_track, max_track, candidate_obs,
-         draw_detector, kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, ofps,
+         draw_detector, kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, 
          show_heat, heat_frac, heat_fade, geometry, verbose, 
-         select_roi, config):
+         roi_file, select_roi, config):
 
 
     ##  Open the input video file...
     vid = cv2.VideoCapture(vinput)
     
-    FRAMEX, FRAMEY = int(vid.get(3)), int(vid.get(4))
+    FRAMEX, FRAMEY = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     ##  Shape parameters.
     ROI = roi
@@ -190,10 +212,7 @@ def main(vinput, output, odir,
 
     ##  And the output video file.
     video_out = None
-    if not no_video_output:
-
-        video_out = cv2.VideoWriter(output + "_det.mp4", cv2.VideoWriter_fourcc(*'mp4v'), ofps,
-                                    (round(FRAMEX / scale), round(FRAMEY / scale)))
+    if not no_video_output: video_out = output + "_det.mp4"
 
     ##  Build the detector, including the TF engine.
     detector = det.Detector(model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
@@ -240,7 +259,7 @@ def main(vinput, output, odir,
     if video_queue:
 
         video_thread = threading.Thread(target = write_frame_to_stream, 
-                                        args = (video_queue, video_out, draw_frames,
+                                        args = (video_queue, video_out, 
                                                 round(FRAMEX / scale), round(FRAMEY / scale), 
                                                 XMINS, XMAXS, YMINS, YMAXS, pretty_video))
         video_thread.start()
@@ -281,9 +300,7 @@ def main(vinput, output, odir,
     track_thread.join()
 
     ## Finalize all outputs -- video stream, detector, and tracker.
-    if not no_video_output:
-        video_thread.join()
-        video_out.release()
+    if not no_video_output: video_thread.join()
 
     if not no_output:
 
@@ -307,7 +324,7 @@ if __name__ == '__main__':
     parser.add("--nskip", default = 0, type = int, help = "Skip deeper into a stream (useful for debugging)")
 
     ## Model / Detection Engine
-    parser.add('--model', required = True, help = "The tflite model")
+    parser.add('-m', '--model', required = True, help = "The tflite model")
     parser.add('--labels', required = True, help='Path of the labels file.')
     parser.add('--thresh', default = 0.4, type = float, help = "Confidence level of detections")
     parser.add("--categs", default = ["car"], nargs = "+", help = "Types of objects to process -- must match labels")
@@ -315,6 +332,7 @@ if __name__ == '__main__':
 
     ## Detector Parameters
     parser.add("--select_roi", default = False, action = "store_true", help = "Interactively re-select the ROI.")
+    parser.add("--roi_file", default = "", type = str, help = "Get the ROI for this file from a csv file (if it can be found).")
     parser.add("--roi", default = [], type = float, nargs = 4, help = "xmin, xmax, ymin, ymax")
     parser.add("--xgrid", default = 1, type = int, help = "Number of times to subdivide the detection ROI horizontally.")
     parser.add("--ygrid", default = 1, type = int, help = "Number of times to subdivide the detection ROI vertically.")
@@ -343,7 +361,6 @@ if __name__ == '__main__':
     parser.add("--no_output", default = False, action = "store_true", help = "Do not record ANY outputs -- csv or mp4.")
     parser.add("--no_video_output", default = False, action = "store_true", help = "Do not record the stream.")
     parser.add("--pretty_video", default = False, action = "store_true", help = "Shade out the un-detected space.")
-    parser.add("--ofps", default = 30, type = int, help = "Output frames per second.")
 
     parser.add("--draw_detector", default = False, action = "store_true", help = configargparse.SUPPRESS)
 
@@ -372,8 +389,9 @@ if __name__ == '__main__':
     else: args.draw_detector = False
 
     if args.nframes <= 0: args.nframes = float("inf")
+    # If only cv2.CAP_PROP_FRAME_COUNT or cv2.CAP_PROP_FRAME_COUNT were reliable!
 
-    args.roi = get_roi(args.vinput, args.scale, args.roi, args.select_roi)
+    args.roi = get_roi(args.vinput, args.scale, args.roi, args.roi_file, args.select_roi)
 
     main(**vars(args))
 
