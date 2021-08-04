@@ -102,7 +102,8 @@ class Detection():
 
     colors = {"person" : (0, 0, 255),
               "car" : (0, 255, 255), "bus" : (0, 255), "truck" : (255, 0, 0),
-              "dog" : (255, 0, 255), "bike" : (125, 255, 255), "stroller" : (125, 125, 255)}
+              "dog" : (255, 0, 255), "bike" : (125, 255, 255), "bicycle" : (125, 255, 255), 
+              "stroller" : (125, 125, 255)}
 
     def __init__(self, xy, box = None, conf = None, label = None, frame_id = None, color = None):
 
@@ -227,6 +228,8 @@ class Detector():
 
         self.geo_homography = cv2.findHomography(src, dst)[0]
         self.geo_inv_homography = np.linalg.pinv(cv2.findHomography(src / scale, dst_inv)[0])
+
+        self.SROI = [int(v/scale) for v in [self.xmin, self.xmax, self.ymin, self.ymax]]
 
 
     def detect_grid(self, frame, frame_id = None):
@@ -426,6 +429,8 @@ class Detector():
 
         size = frame.shape[:2]
 
+        XMINS, XMAXS, YMINS, YMAXS = self.SROI
+
         if update:
 
             if not self.has_world_geometry: 
@@ -433,16 +438,17 @@ class Detector():
             else: 
                 self.mask, self.heat = self.projected_heatmap(size, scale, blur, quantile, cmap)
 
+
         if not self.roi:
             frame[self.mask] = (frame[self.mask] * (1 - heat_level) + heat[self.mask] * heat_level).astype("uint8")
 
         else:
 
-            XMINS, XMAXS, YMINS, YMAXS = [int(v/scale) for v in [self.xmin, self.xmax, self.ymin, self.ymax]]
+            smask_roi = self.mask[YMINS:YMAXS,XMINS:XMAXS]
 
-            frame[YMINS:YMAXS,XMINS:XMAXS][self.mask[YMINS:YMAXS,XMINS:XMAXS]] = \
-                (frame[YMINS:YMAXS,XMINS:XMAXS][self.mask[YMINS:YMAXS,XMINS:XMAXS]] * (1 - heat_level) + \
-                 self.heat[YMINS:YMAXS,XMINS:XMAXS][self.mask[YMINS:YMAXS,XMINS:XMAXS]] * heat_level).astype("uint8")
+            frame[YMINS:YMAXS,XMINS:XMAXS][smask_roi] = \
+                (frame[YMINS:YMAXS,XMINS:XMAXS][smask_roi] * (1 - heat_level) + \
+                 self.heat[YMINS:YMAXS,XMINS:XMAXS][smask_roi] * heat_level).astype("uint8")
 
         return frame
         
