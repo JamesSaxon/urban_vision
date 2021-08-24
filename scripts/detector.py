@@ -1,5 +1,8 @@
-import cv2, numpy as np
+import os
 
+import cv2
+
+import numpy as np
 import pandas as pd
 
 from edgetpu.detection.engine import DetectionEngine
@@ -9,49 +12,6 @@ from scipy.ndimage import gaussian_filter
 
 from PIL import Image
 
-
-def bbox_intersection(A, B):
-
-    # coordinates of the intersection rectangle
-    xmin = max(A.xmin, B.xmin)
-    ymin = max(A.ymin, B.ymin)
-    xmax = min(A.xmax, B.xmax)
-    ymax = min(A.ymax, B.ymax)
-
-    # compute the area of intersection rectangle
-    intersection = max(0, xmax - xmin) * max(0, ymax - ymin)
-
-    return intersection
-
-def max_fractional_intersection(objA, objB):
-
-    intx_area = bbox_intersection(objA.box, objB.box)
-
-    return max(intx_area / objA.area, intx_area / objB.area)
-
-
-def remove_duplicates(detections, max_overlap = 0.25, match_labels = False, labels = None):
-
-    duplicates = []
-    for io, iobj in enumerate(detections):
-
-        for jo, jobj in enumerate(detections[io+1:]):
-
-            jo += io + 1
-
-            if match_labels and (iobj.label != jobj.label): continue
-
-            intx_frac = max_fractional_intersection(iobj, jobj)
-
-            if intx_frac > max_overlap:
-
-                duplicates.append(io if iobj.conf < jobj.conf else jo)
-
-    
-    for d in sorted(list(set(duplicates)), reverse = True): 
-        detections.pop(d)
-
-    return 
 
 
 class BBox():
@@ -77,14 +37,14 @@ class BBox():
         
         return (self.xmin, self.ymin, self.xmax - self.xmin, self.ymax - self.ymin)
 
-    def loc(self, hloc, vloc):
+    def loc(self, hloc = None, vloc = None):
 
+        x = (self.xmax + self.xmin) / 2
         if hloc == "left":   x = self.xmax
-        if hloc == "center": x = (self.xmax + self.xmin) / 2
         if hloc == "right":  x = self.xmin
 
+        y = (self.ymax + self.ymin) / 2
         if vloc == "upper":  y = self.ymin
-        if vloc == "middle": y = (self.ymax + self.ymin) / 2
         if vloc == "lower":  y = self.ymax
 
         return x, y 
@@ -96,6 +56,34 @@ class BBox():
                              tuple((int(self.xmax / scale), int(self.ymax / scale))),
                              color, width)
 
+    def intersection(self, other):
+    
+        # coordinates of the intersection rectangle
+        xmin = max(self.xmin, other.xmin)
+        ymin = max(self.ymin, other.ymin)
+        xmax = min(self.xmax, other.xmax)
+        ymax = min(self.ymax, other.ymax)
+    
+        return BBox(xmin, xmax, ymin, ymax)
+
+    def intersection_area(self, other):
+    
+        # coordinates of the intersection rectangle
+        xmin = max(self.xmin, other.xmin)
+        ymin = max(self.ymin, other.ymin)
+        xmax = min(self.xmax, other.xmax)
+        ymax = min(self.ymax, other.ymax)
+    
+        # compute the area of intersection rectangle
+        return max(0, xmax - xmin) * max(0, ymax - ymin)
+    
+    
+    def max_fractional_intersection(self, other):
+    
+        intx_area = self.intersection_area(other)
+    
+        return max(intx_area / self.area, intx_area / other.area)
+
 
 
 class Detection():
@@ -105,11 +93,7 @@ class Detection():
               "dog" : (255, 0, 255), "bike" : (125, 255, 255), "bicycle" : (125, 255, 255), 
               "stroller" : (125, 125, 255)}
 
-    def __init__(self, xy, box = None, conf = None, label = None, frame_id = None, color = None):
-
-        self.xy    = xy
-        self.x     = xy[0]
-        self.y     = xy[1]
+    def __init__(self, box = None, conf = None, label = None, frame_id = None, color = None):
 
         if box is None: 
             self.box  = None
@@ -117,6 +101,10 @@ class Detection():
         else:
             self.box = BBox(**box)
             self.area = self.box.area
+
+        self.xy = self.box.loc()
+        self.x = self.xy[0]
+        self.y = self.xy[1]
 
         self.conf  = conf
         self.label = label
@@ -126,6 +114,23 @@ class Detection():
         if   color is not None: self.color = color
         elif label is not None: self.color = Detection.colors[label]
         else: self.color = None
+
+
+    def set_reference_location(self, hloc = None, vloc = None):
+
+        self.xy = self.box.loc(hloc, vloc)
+        self.x = self.xy[0]
+        self.y = self.xy[1]
+
+
+    def bbox_intersection(self, other):
+    
+        return self.box.intersection(other.box)
+    
+    def max_fractional_intersection(self, other):
+    
+        return self.box.max_fractional_intersection(other.box)
+
 
 
 
@@ -139,11 +144,37 @@ class Detector():
                  relative_coord = False, keep_aspect_ratio = False,
                  categs = ["person"], thresh = 0.6, k = 1,
                  max_overlap = 0.5, min_area = 0,
-                 loc = "upper center", edge_veto = 0, verbose = False):
+                 loc = "upper center", edge_veto = 0,
+                 yolo = True, nms_thresh = 0.3,
+                 verbose = False):
 
 
-        self.engine = DetectionEngine(model)
+
         self.labels = dataset_utils.read_label_file(labels) if labels else None
+
+        self.yolo = yolo
+        if yolo:
+
+            yolo_path    = os.path.abspath("../yolo/")
+            yolo_config  = os.path.join(yolo_path, "yolov3.cfg")
+            yolo_weights = os.path.join(yolo_path, "yolov3.weights")
+            yolo_labels  = os.path.join(yolo_path, "coco.names")
+            
+            self.yolo_model = cv2.dnn.readNetFromDarknet(yolo_config, yolo_weights)
+            self.yolo_model.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+            self.yolo_model.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+            
+            yn = self.yolo_model.getLayerNames()
+            self.yolo_names = [yn[i[0] - 1] for i in self.yolo_model.getUnconnectedOutLayers()]
+
+            self.yolo_labels = open(yolo_labels).read().strip().split("\n")
+
+            self.nms_thresh = nms_thresh
+
+        else: 
+
+            self.engine = DetectionEngine(model)
+
 
         self.categs = categs
         self.ncategs = {li for li, l in self.labels.items() if l in categs}
@@ -232,7 +263,130 @@ class Detector():
         self.SROI = [int(v/scale) for v in [self.xmin, self.xmax, self.ymin, self.ymax]]
 
 
-    def detect_grid(self, frame, frame_id = None):
+    def remove_duplicates(self): # , match_labels = False, labels = None):
+    
+        duplicates = []
+        for io, iobj in enumerate(self.detections):
+    
+            for jo, jobj in enumerate(self.detections[io+1:]):
+    
+                jo += io + 1
+    
+                if match_labels and (iobj.label != jobj.label): continue
+    
+                intx_frac = iobj.max_fractional_intersection(jobj)
+    
+                if intx_frac > self.max_overlap:
+    
+                    duplicates.append(io if iobj.conf < jobj.conf else jo)
+    
+        
+        for d in sorted(list(set(duplicates)), reverse = True): 
+            self.detections.pop(d)
+    
+
+
+
+    def detect(self, frame, frame_id = None):
+
+        if self.yolo: self.detect_yolo(frame, frame_id)
+        else:         self.detect_ssd(frame, frame_id)
+        
+        return self.detections
+
+
+    def detect_yolo(self, frame, frame_id = None):
+
+        self.frame += 1
+        if frame_id is None: frame_id = self.frame 
+
+        if self.roi: 
+            roi_xmin = self.xmin
+            roi_xmax = self.xmax
+            roi_ymin = self.ymin
+            roi_ymax = self.ymax
+
+        else:
+            roi_xmin, roi_ymin = 0, 0
+            roi_ymax, roi_xmax = frame.shape[:2]
+
+        range_x = roi_xmax - roi_xmin
+        range_y = roi_ymax - roi_ymin
+
+        frame_roi = frame[roi_ymin:roi_ymax, roi_xmin:roi_xmax]
+        blob = cv2.dnn.blobFromImage(frame_roi, 1 / 255, (416, 416),
+                                     swapRB = True, crop = False)
+
+        self.yolo_model.setInput(blob)
+        
+        yolo_detections = self.yolo_model.forward(self.yolo_names)
+        
+        boxes, confs, classes = [], [], []
+        
+        # loop over each of the layer outputs
+        for output in yolo_detections:
+        
+            # loop over each of the detections
+            for det in output:
+            
+
+                # extract the class ID and confidence (i.e., probability) of
+                # the current object detection
+                scores = det[5:]
+                class_id = np.argmax(scores)
+                conf = scores[class_id]
+                
+                # filter weak detections.
+                if conf < self.thresh: continue
+                
+                # YOLO returns center + dimensions.
+                # scale the bbox to to image size
+                box = det[0:4] * np.array([range_x, range_y, range_x, range_y])
+                (ctr_x, ctr_y, width, height) = box.astype("int")
+                    
+                # use the center (x, y)-coordinates to derive the top and
+                # and left corner of the bounding box
+                x = int(ctr_x - (width  / 2)) + roi_xmin
+                y = int(ctr_y - (height / 2)) + roi_ymin
+                    
+                # Update lists needed for NMS.
+                boxes  .append([x, y, int(width), int(height)])
+                confs  .append(float(conf))
+                classes.append(class_id)
+
+
+
+        self.detections = []
+        
+        idxs = cv2.dnn.NMSBoxes(boxes, confs, self.thresh, self.nms_thresh)
+
+        if not len(idxs): return self.detections
+        else: idxs = set(idxs.flatten())
+        
+        for i in idxs:
+        
+            label = self.yolo_labels[classes[i]]
+
+            # print('detection!', x, y, confs[i], class_id, label, self.categs)
+            if label not in self.categs: continue
+            
+            box_dict = {"xmin" : boxes[i][0], "xmax" : boxes[i][0] + boxes[i][2], 
+                        "ymin" : boxes[i][1], "ymax" : boxes[i][1] + boxes[i][3]}
+        
+            det = Detection(box_dict, confs[i], label, frame_id)
+            
+            if det.area < self.min_area: continue
+
+            det.set_reference_location(self.hloc, self.vloc)
+            self.detections.append(det)
+            
+        self.all_detections.extend(self.detections)
+
+
+        return self.detections
+
+
+    def detect_ssd(self, frame, frame_id = None):
 
         self.frame += 1
         if frame_id is None: frame_id = self.frame 
@@ -288,8 +442,10 @@ class Detector():
             subimage = Image.fromarray(cv2.cvtColor(frame[subroi_ymin:subroi_ymax,
                                                        subroi_xmin:subroi_xmax],
                                                        cv2.COLOR_BGR2RGB))
+
             raw_detections = self.engine.detect_with_image(subimage, threshold = self.thresh,
-                                                keep_aspect_ratio=False, relative_coord=False, top_k=self.k)
+                                                           keep_aspect_ratio = False, 
+                                                           relative_coord = False, top_k = self.k)
 
             for iobj, obj in enumerate(raw_detections):
 
@@ -313,22 +469,17 @@ class Detector():
                 box[1] += subroi_ymin
                 box[3] += subroi_ymin
 
-                draw_box = box.astype(int)
+                # draw_box = box.astype(int)
 
                 box_xmin, box_ymin, box_xmax, box_ymax = box
-
-                if self.hloc == "left":   x = box_xmax
-                if self.hloc == "center": x = (box_xmax + box_xmin) / 2
-                if self.hloc == "right":  x = box_xmin
-
-                if self.vloc == "upper":  y = box_ymin
-                if self.vloc == "middle": y = (box_ymax + box_ymin) / 2
-                if self.vloc == "lower":  y = box_ymax
-
                 box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
 
-                det = Detection((x,y), box_dict, obj.score, label, frame_id)
-                if det.area > self.min_area: self.detections.append(det)
+                det = Detection(box_dict, obj.score, label, frame_id)
+                if det.area < self.min_area: continue
+
+                det.set_reference_location(self.hloc, self.vloc)
+
+                self.detections.append(det)
 
 
         remove_duplicates(self.detections, labels = self.ncategs, max_overlap = self.max_overlap)
@@ -353,6 +504,11 @@ class Detector():
         df = pd.DataFrame([{"frame": d.frame, "x" : d.x, "y" : d.y, "area" : d.area, "conf" : d.conf, "label" : d.label,
                             "xmin" : d.box.xmin, "xmax" : d.box.xmax, "ymin" : d.box.ymin, "ymax" : d.box.ymax}
                            for d in self.all_detections])
+
+        if not df.shape[0]: 
+            print("No frames with detections; not writing to file.")
+            return
+
 
         df = df[["frame", "conf", "label", "x", "y", "area", "xmin", "xmax", "ymin", "ymax"]]
 

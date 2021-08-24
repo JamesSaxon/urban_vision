@@ -1,33 +1,33 @@
 #!/usr/bin/env python
 
-import configargparse
-import platform
-import subprocess
-
-import cv2
-
-import numpy as np
-
-from PIL import Image
-from PIL import ImageDraw
-
-from edgetpu.detection.engine import DetectionEngine
-from edgetpu.utils import dataset_utils
-
-from glob import glob
-
 import os, sys
 
 from tqdm import tqdm
 
+import configargparse
+# import platform
+# import subprocess
+
+import cv2
+
+import numpy as np
 import pandas as pd
 
-import tracker as tr, detector as det
+# from PIL import Image
+# from PIL import ImageDraw
+
+from edgetpu.detection.engine import DetectionEngine
+from edgetpu.utils import dataset_utils
+
+# from glob import glob
 
 import threading
 import queue
 
-from time import sleep
+import tracker as tr
+import detector as det
+
+# from time import sleep
 
 colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
@@ -110,7 +110,7 @@ def detect_objects_in_frame(qdetector, qtracker, detector,
         try: nframe, frame, scaled = qdetector.get(timeout = 0.1)
         except: continue
 
-        detections = detector.detect_grid(frame)
+        detections = detector.detect(frame)
 
         if SHOW_HEAT: 
 
