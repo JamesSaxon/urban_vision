@@ -15,6 +15,10 @@ from PIL import Image
 
 
 class BBox():
+    """
+    Convenience functions for a bounding box composed of 
+    pixel extents xmin, xmax, ymin, ymax.
+    """
 
     def __init__(self, xmin, xmax, ymin, ymax):
 
@@ -87,6 +91,13 @@ class BBox():
 
 
 class Detection():
+    """
+    A detection consists of a bounding box along with a confidence value and a label.
+    We can also specify a "point" on the box (upper, middle, lower; left, center, right)
+      as the default location for tracking.
+    These values are protected in Detector() instead of here.
+    And just for fun, we can set the color.
+    """
 
     colors = {"person" : (0, 0, 255),
               "car" : (0, 255, 255), "bus" : (0, 255), "truck" : (255, 0, 0),
@@ -135,6 +146,15 @@ class Detection():
 
 
 class Detector():
+    """
+    Detector is, primarily, a wrapper for an edgetpu SSD detector or a YOLO detector.
+    This entails labels, confidence levels, ROIs (potentially gridded, for the SSD.
+    All detections are saved over time; individual detections can be visualized as bounding boxes
+      and cumulative patterns can be shown as a heatmap.
+    In addition, there is some functionality for transforming detections from the camera frame
+    into a real-world geometry, i.e., generating the homography from a series of control points.
+    These are specified in a geography file -- see set_world_geometry.
+    """
 
     colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
@@ -147,7 +167,6 @@ class Detector():
                  loc = "upper center", edge_veto = 0,
                  yolo = True, nms_thresh = 0.3,
                  verbose = False):
-
 
 
         self.labels = dataset_utils.read_label_file(labels) if labels else None
@@ -263,7 +282,7 @@ class Detector():
         self.SROI = [int(v/scale) for v in [self.xmin, self.xmax, self.ymin, self.ymax]]
 
 
-    def remove_duplicates(self): # , match_labels = False, labels = None):
+    def remove_duplicates(self, match_labels = False):
     
         duplicates = []
         for io, iobj in enumerate(self.detections):
@@ -288,14 +307,21 @@ class Detector():
 
 
     def detect(self, frame, frame_id = None):
+        """
+        Run YOLO or SSD according to settings!
+        """
 
         if self.yolo: self.detect_yolo(frame, frame_id)
-        else:         self.detect_ssd(frame, frame_id)
+        else:         self.detect_ssd (frame, frame_id)
         
         return self.detections
 
 
     def detect_yolo(self, frame, frame_id = None):
+        """
+        Pretty straightforward application of the cv2.dnn.
+        All of the work is in configuring the GPU!!
+        """
 
         self.frame += 1
         if frame_id is None: frame_id = self.frame 
@@ -355,7 +381,6 @@ class Detector():
                 classes.append(class_id)
 
 
-
         self.detections = []
         
         idxs = cv2.dnn.NMSBoxes(boxes, confs, self.thresh, self.nms_thresh)
@@ -387,6 +412,10 @@ class Detector():
 
 
     def detect_ssd(self, frame, frame_id = None):
+        """
+        The short version of this is that it is just applying the edgetput detector.
+        The slightly longer version is that we can also "grid" the SSD detection area.
+        """
 
         self.frame += 1
         if frame_id is None: frame_id = self.frame 
@@ -403,11 +432,11 @@ class Detector():
         range_x = roi_xmax - roi_xmin
         range_y = roi_ymax - roi_ymin
 
-        #ROI list from grid.
+        # ROI list from grid.
         xvals = np.linspace(roi_xmin, roi_xmax, self.xgrid+1)
         yvals = np.linspace(roi_ymin, roi_ymax, self.ygrid+1)
 
-        #Set number of overlap pixels
+        # Set number of overlap pixels
         if self.xgrid != 1:
             xoverlap = int(self.overlap*(roi_xmax-roi_xmin)/self.xgrid)
         else: xoverlap = 0
@@ -482,7 +511,7 @@ class Detector():
                 self.detections.append(det)
 
 
-        remove_duplicates(self.detections, labels = self.ncategs, max_overlap = self.max_overlap)
+        self.remove_duplicates()
 
         self.all_detections.extend(self.detections)
 
@@ -491,6 +520,9 @@ class Detector():
 
 
     def draw(self, frame, scale, width = 1, color = (255, 255, 255)):
+        """
+        Iterate over current detections and draw their bounding boxes.
+        """
 
         for d in self.detections:
 
@@ -500,6 +532,9 @@ class Detector():
 
 
     def write(self, file_name):
+        """
+        Write a CSV file of all detections.
+        """
     
         df = pd.DataFrame([{"frame": d.frame, "x" : d.x, "y" : d.y, "area" : d.area, "conf" : d.conf, "label" : d.label,
                             "xmin" : d.box.xmin, "xmax" : d.box.xmax, "ymin" : d.box.ymin, "ymax" : d.box.ymax}
@@ -540,6 +575,11 @@ class Detector():
         
 
     def projected_heatmap(self, size, scale, blur, quantile, cmap):
+        """
+        Same as above, but the heatmap is calculated in a transformed geometry
+        so that each detection area corresponds to "ground" area instead of pixels.
+        Regions outside of the bounding box of the mapped area are simply masked off.
+        """
 
         if not self.all_detections: 
             return np.ones(size).astype(bool), np.zeros((size[0], size[1], 3)).astype("uint8")
@@ -568,7 +608,6 @@ class Detector():
         img8_col = cv2.applyColorMap(img8, cv2.COLORMAP_PARULA)
         img8_col = cv2.warpPerspective(img8_col, self.geo_inv_homography, dsize = (size[1], size[0]))
 
-        # print(self.geo_yrange * self.inv_binsize)
         mask = np.ones((int(self.geo_yrange * self.inv_binsize),
                         int(self.geo_xrange * self.inv_binsize))) * 255
 
@@ -582,6 +621,9 @@ class Detector():
 
     def draw_heatmap(self, frame, heat_level = 0.5, update = True, scale = 1,
                      blur = 1, quantile = 0.99, cmap = cv2.COLORMAP_PARULA, xmin = 0):
+        """
+        Draw the naive or projected heatmap, based on whatever is available!
+        """
 
         size = frame.shape[:2]
 

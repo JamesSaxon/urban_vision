@@ -5,21 +5,14 @@ import os, sys
 from tqdm import tqdm
 
 import configargparse
-# import platform
-# import subprocess
 
 import cv2
 
 import numpy as np
 import pandas as pd
 
-# from PIL import Image
-# from PIL import ImageDraw
-
 from edgetpu.detection.engine import DetectionEngine
 from edgetpu.utils import dataset_utils
-
-# from glob import glob
 
 import threading
 import queue
@@ -27,30 +20,44 @@ import queue
 import tracker as tr
 import detector as det
 
-# from time import sleep
-
-colors = [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
 
 
 def get_roi(vinput, scale, roi, roi_file = "", select_roi = False): 
+    """
+    This function checks takes its ROI from the first of four alternatives:
+    1. `roi` -- a list of [xmin, xmax, ymin, ymax] explicitly indicated on the command line.
+    2. An roi_file consisting of lines of video_filenames, xmin, xmax, ymin, ymax.
+    3. If `select_roi` is specified and the video is valid, then use cv2.selectROI
+    4. Failing all of these, then just use the frame width and height.
+    Although the command-line options and file format take inputs as fractions,
+    the returned ROIs are in number of pixels.
+    """
 
+    ## To get the frame dimensions and
+    ## be able to call the cv2 ROI selector,
+    ## we will open a video capture option.
     vid = cv2.VideoCapture(vinput)
 
-    FRAMEX, FRAMEY = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH)), int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    FRAMEX = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
+    FRAMEY = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    # If the path does not exist, overwrite options.
     if roi_file and not os.path.exists(roi_file): 
         roi_file, select_roi = "", True
 
-    if roi: roi_file = ""
-
-    if roi_file:
+    if not roi and roi_file:
         roi_df = pd.read_csv(roi_file, index_col = "file")
+
+        # If the video is found, then rescale and return.
+        # If it is not, default to the opencv method.
         if vinput in roi_df.index:
             ROI = roi_df.loc[vinput].to_dict()
             ROI = [int(ROI["xmin"] * FRAMEX), 
                    int(ROI["xmax"] * FRAMEX), 
                    int(ROI["ymin"] * FRAMEY),
                    int(ROI["ymax"] * FRAMEY)]
+
+            vid.release()
 
             return ROI
 
@@ -90,6 +97,8 @@ def get_roi(vinput, scale, roi, roi_file = "", select_roi = False):
 
         ROI = [XMIN, XMAX, YMIN, YMAX]
 
+    # No video file has been found, and we were neither _given_ an ROI
+    # nor were we asked to specify one.  We revert to width x height.
     else: 
 
         ROI = [0, FRAMEX, 0, FRAMEY]
@@ -104,6 +113,14 @@ COMPLETE_INPUT, COMPLETE_DETECTION, COMPLETE_TRACKING = False, False, False
 
 def detect_objects_in_frame(qdetector, qtracker, detector, 
                             DRAW_DETECTOR, SHOW_HEAT, HEAT_FRAC, HEAT_FADE, SCALE):
+    """
+    This function loops on the detection queue (of frames).
+    It runs all detector-based functionality (detections, heat map, drawing)
+    and then passes the detections to the tracker queue.
+    The detector is passed as an argument, because the "actual" edgetpu
+    detector needs to be on the main thread.
+    If input is complete, then it completes all frames, and signals completion.
+    """
 
     while not (COMPLETE_INPUT and qdetector.empty()):
 
@@ -129,6 +146,13 @@ def detect_objects_in_frame(qdetector, qtracker, detector,
 
 
 def track_objects_in_frame(qtracker, qvideo = None, tracker = None, SCALE = 1):
+    """
+    The tracker receives frames and detections from the detector queue.
+    If tracking is activated, it applies tracking and any drawing functionality.
+    If an output video stream is provided, 
+    it sends the drawn / decorated frame to that queue.
+    When no frames remain, and detection is complete, it terminates / task_done.
+    """
 
     while not (COMPLETE_DETECTION and qtracker.empty()):
 
@@ -153,13 +177,20 @@ def track_objects_in_frame(qtracker, qvideo = None, tracker = None, SCALE = 1):
 def write_frame_to_stream(video_queue, 
                           VIDEO_OUT, FRAMEXS, FRAMEYS,
                           XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, pretty_video = False):
+    """
+    This function simply writes frames to an output VideoWriter.
+    It loops on the video_queue for inputs.
+    If a scaled ROI is specified (XMAXS, etc.), it either draws a box or, 
+    for `pretty_video`, shades the area outside the ROI.
+    This is "pretty expensive", so I dod this only for "publicity."
+    """
 
     VIDEO_OUT = cv2.VideoWriter(VIDEO_OUT, cv2.VideoWriter_fourcc(*'mp4v'), 30, (FRAMEXS, FRAMEYS))
 
     shade = None
     if pretty_video:
 
-        shade = 1.5 * np.ones((FRAMEYS, FRAMEXS)).astype("uint8")
+        shade = 1.5 * np.ones((FRAMEYS, FRAMEXS)) # .astype("uint8")
         shade[YMINS:YMAXS,XMINS:XMAXS] = 1
 
 
@@ -190,13 +221,20 @@ def write_frame_to_stream(video_queue,
 
 def main(vinput, output, odir,
          nframes, nskip,
-         model, labels, thresh, categs, max_det_items,
+         yolo, model, labels, thresh, categs, max_det_items,
          roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer,
          no_tracker, match_method, max_missing, max_distance, min_distance_or,
          predict_matches, kalman_track, max_track, candidate_obs,
          draw_detector, kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, 
          show_heat, heat_frac, heat_fade, geometry, verbose, 
          roi_file, select_roi, config):
+    """
+    Here, we build and configure the detector and tracker objects, and 
+    build and collect the queues for detection, tracking, and video outputs.
+    The detector is also creaed on the "main" thread.
+    The frame reader is on the main thread, because I had "issues" otherwise.
+    So "main" could be considered the 0th thread of the program.
+    """
 
 
     ##  Open the input video file...
@@ -215,7 +253,7 @@ def main(vinput, output, odir,
     if not no_video_output: video_out = output + "_det.mp4"
 
     ##  Build the detector, including the TF engine.
-    detector = det.Detector(model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
+    detector = det.Detector(yolo = yolo, model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
                             max_overlap = max_overlap, loc = roi_loc, edge_veto = edge_veto, min_area = min_area, verbose = False)
 
     detector.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX})
@@ -294,14 +332,21 @@ def main(vinput, output, odir,
     pbar.close()
 
 
+    # The inputs are now complete.
+    # Set a global flag, so that the other threads will terminate
+    #  when they complete all frames that remain in their queues.
     global COMPLETE_INPUT
     COMPLETE_INPUT = True
     detect_thread.join()
     track_thread.join()
 
-    ## Finalize all outputs -- video stream, detector, and tracker.
-    if not no_video_output: video_thread.join()
 
+    ## Finalize all outputs -- video stream, detector, and tracker.
+    if not no_video_output:
+
+        video_thread.join()
+
+    # Unless told not to, let's write CSV output files.
     if not no_output:
 
         detector.write(output + "_det.csv")
@@ -331,6 +376,7 @@ if __name__ == '__main__':
     parser.add('--max_det_items', default = 50, type = int, help = "'k' parameter of max detections, for engine.")
 
     ## Detector Parameters
+    parser.add("--yolo", default = False, action = "store_true", help = "Switch to YOLO detector from SSD (SSD is the default).")
     parser.add("--select_roi", default = False, action = "store_true", help = "Interactively re-select the ROI.")
     parser.add("--roi_file", default = "", type = str, help = "Get the ROI for this file from a csv file (if it can be found).")
     parser.add("--roi", default = [], type = float, nargs = 4, help = "xmin, xmax, ymin, ymax")

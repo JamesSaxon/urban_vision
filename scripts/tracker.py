@@ -13,14 +13,19 @@ import cv2
 
 from pykalman import KalmanFilter
 
-bgr_colors = [(60, 15, 150), (30, 80, 190), (0, 190, 190), 
-              (50, 90, 25), (130, 30, 15), (60, 45, 180)]
 
 bgr_colors = [( 0,  0, 255), ( 0, 155, 255), (0, 255, 255), 
               ( 0, 255, 0),  (255, 0, 0),   (255, 0, 255)]
 
 class Object():
-
+    """
+    Objects are sequences of detections that have been associated together, by the Tracker.
+    It tracks its locations, confidences, and area over time, as well as its current bounds,
+      missing detections, and `edge_strikes` against the bounds of the detection region.
+    Objects start out with `active` set to True; this changes to false 
+      after a configurable number of missed detections edge strikes.
+    The `Object` is also able to project itself forward in time, using a Kalman filter.
+    """
 
     kalman_transition = [[1, 1, 0, 0],
                          [0, 1, 0, 0],
@@ -72,6 +77,7 @@ class Object():
         self.kf_means = [self.xyt[0][0], 0, self.xyt[0][1], 0]
         self.kf_covs  = [0, 0, 0, 0]
 
+
     def fillna(self, t):
 
         self.xyt.append((np.nan, np.nan, t))
@@ -81,6 +87,9 @@ class Object():
 
 
     def update(self, det, t, ts = None):
+        """
+        Update location with either known or missing coordinates (Kalman).
+        """
 
         # Yay recursion :-)
         if self.xyt and t - 1 != self.last_time:
@@ -233,6 +242,11 @@ class Object():
 
 
 class Tracker():
+    """
+    Tracker associates subsequent detections together.
+    It can also run CSRT correlational tracking, 
+      but this is expensive and doesn't work very well.
+    """
 
     STRIKES = 1
 
@@ -311,7 +325,6 @@ class Tracker():
 
     def get_last_locations(self, return_unmatched = False, return_dict = False):
 
-        # object_unmatched = {k for k, v in self.objects.items() if v.active}
         object_unmatched = np.array([k for k, v in self.objects.items() if v.active])
 
         locations = np.array([self.objects[k].last_location
@@ -325,7 +338,6 @@ class Tracker():
 
     def predict_current_locations(self, return_unmatched = False):
 
-        # object_unmatched = {k for k, v in self.objects.items() if v.active}
         object_unmatched = np.array([k for k, v in self.objects.items() if v.active])
 
         locations = np.array([self.objects[k].predict_location(self.t)
@@ -346,6 +358,9 @@ class Tracker():
         return False
 
     def deactivate_objects(self):
+        """
+        Get rid of objects that have struck the edge too many times, or have left the ROI.
+        """
 
         for o in self.objects.values():
 
@@ -358,15 +373,32 @@ class Tracker():
                o.edge_strikes > Tracker.STRIKES: 
                 o.deactivate(self.t)
 
+
     def match(self, D2, mask_candidates): 
+        """
+        Match objects between two frames based on and m x n matrix of squared distances.
+        There are two possible ways of doing this -- one greed, the other evaluating all combinatorics
+          for the least total cost.
+        The cut-off, MAX_DISTANCE2 has already been applied to create the mask,
+          before passing the distance matrix, D2, to this function.
+        """
 
         if   self.method == "greedy":    return self.greedy_matches  (D2, mask_candidates)
         elif self.method == "min_cost" : return self.min_cost_matches(D2, mask_candidates)
 
     def greedy_matches(self, D2, mask_candidates):
+        """
+        This method simply takes the shortest distance between 
+          objects in the present and last frames.
+        After each call of argmin, that object (in each frame) is removed from consideration -- 
+          the row and column are masked off.
+        The function terminates when there are no available objects combination to match.
+        """
 
         matches = {}
 
+        # This is just going False / True.
+        # We run the cycle once with candidates excluded, and then include them.
         for include_candidates in self.INCLUDE_CANDIDATES_CYCLES:
 
             while (    include_candidates and not (D2.mask).all()) or \
@@ -391,9 +423,19 @@ class Tracker():
         return matches
 
     def min_cost_matches(self, D2, mask_candidates = None):
+        """
+        Instead of greedy matching, we can also consider all possible permutations of matches.
+        For this, we evaluate the total number matched, and total cost of the match D2.sum().
+        The "optimal" choice is the one with the lowest cost, 
+          among choices with the maximum number of matches.
+        This is somewhat slower, but the permutations are not too bad,
+          since we are considering objects currently in view.
+        """
         
         full_matches = {}
 
+        # As in the greedy match, 
+        #  first run it with candidates masked, and then include them.
         extra_masks = [False]
         if mask_candidates is not None:
             extra_masks = [mask_candidates, False]
@@ -456,6 +498,10 @@ class Tracker():
 
 
     def update(self, detections, frame = None, ts = None):
+        """
+        This is the main function, in which we add new detections
+          and associate them with existing ones!
+        """
 
         self.t += 1
 
@@ -484,6 +530,7 @@ class Tracker():
         new_areas  = np.array([det.area for det in detections])
         new_indexes = set(range(len(new_points)))
 
+        # By whichever means, get the current locations of known objects.
         if self.predict_match_locations:
             obj_unmatched, obj_points = self.predict_current_locations(return_unmatched = True)
 
@@ -492,20 +539,27 @@ class Tracker():
 
         obj_areas = np.array([self.objects[o].current_area for o in obj_unmatched])
 
+        # This is the basis for all matching, whether greedy or minimum total cost.
         D2 = cdist(obj_points, new_points, 'sqeuclidean')
 
+        # The initial mask is based on the squared distance between objects,
+        # relative to the sizes / areas of those objects.
         mask_new  = D2 > self.MAX_DISTANCE2 * new_areas[np.newaxis,:]
         mask_old  = D2 > self.MAX_DISTANCE2 * obj_areas[:,np.newaxis]
 
         mask = mask_new & mask_old
-        # print(mask1, mask2, mask)
 
         D2 = np.ma.array(D2, mask = mask) # D2 > self.MAX_DISTANCE * np.sqrt(new_areas)[np.newaxis,:])
 
+        # If this setting is in place, do not match objects
+        # until they have been around for a little while.
+        # THis mask is passed to the self.match(), 
+        #   and applied there (and then not applied, in turn).
         mask_candidates = None
         if self.NOBS_CANDIDATE:
             mask_candidates = np.array([self.objects[o].nobs < self.NOBS_CANDIDATE for o in obj_unmatched])[:,np.newaxis]
 
+        # Do the matching!
         matches = self.match(D2, mask_candidates)
   
         new_indexes -= set(matches.values())
@@ -543,15 +597,22 @@ class Tracker():
             self.objects[oidx].update(det, self.t, ts = ts)
 
 
+        # Deactivate objects multiple edge strikes,
+        # or which have one out of the detection ROI.
         self.deactivate_objects()
+
+        # Correlational tracking (only if MAX_TRACK > 0).
         self.track(frame)
 
 
     def reset_track(self, frame = None):
+        """
+        Create a CSRT tracker 
+        """
 
         for tr_idx, oidx in enumerate(self.objects):
 
-            if not self.objects[oidx].active:  continue
+            if not self.objects[oidx].active: continue
 
             # Only update the tracker if we have a detection.
             if self.objects[oidx].last_detection != self.t:
@@ -571,27 +632,38 @@ class Tracker():
 
     def track(self, frame = None, ts = None):
 
-        if frame is None: return
+        # Return immediately if MAX_TRACK is 0.
         if not self.MAX_TRACK: return
+
+        # Can't do anything without a frame!!
+        if frame is None: return
 
         for oidx, o in self.objects.items():
 
-            # If it was detected this round, get out!
+            # If it was detected this round, get out -- let the real detection stand!
             if o.last_detection == self.t: continue
+
+            # If the tracker has expired, then also get out!!
             if o.tracker is None: continue
 
+            # If the tracker generates a good return value,
+            #  then save that as the new location 
             ret, new_box = o.tracker.update(frame)
 
             if not ret:
                 o.tracker = None
                 continue
 
+            # Return value was OK, so make a box out of it!
             new_box = BBox(xmin = new_box[0], ymin = new_box[1], 
                            xmax = new_box[0] + new_box[2], 
                            ymax = new_box[1] + new_box[3])
 
             x, y = new_box.loc(self.hloc, self.vloc)
 
+            # This is "tracking" based update instead of "detection"-based.
+            # This is distinguished by no change in the number of observations
+            #  or the last detected frame.
             self.objects[oidx].update_track(x, y, self.t, new_box, ts = ts)
 
         self.reset_track(frame)
