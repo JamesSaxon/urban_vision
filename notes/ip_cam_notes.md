@@ -33,9 +33,6 @@
 
 ### Trying to Download Data:
 
-* I can see file names here, but site is broken (400 errors / bad request):
-	http://192.168.1.67/doc/page/download.asp?fileType=record
-
 * Search API:
 	```
 	curl -n --digest -X POST -d @search.xml http://192.168.1.67/ISAPI/ContentMgmt/search
@@ -62,37 +59,24 @@
 	</CMSearchDescription>
 	```
 
-* So now download.  The download request fails on the web portal.  Try it in the browser:
-	```
-	curl 'http://192.168.1.67/ISAPI/ContentMgmt/download?playbackURI=rtsp://192.168.1.67/Streaming/tracks/101?starttime=2020-08-20T00:59:07Z&endtime=2020-08-20T01:02:40Z&name=ch01_00000000009000100&size=9817848'
-	```
-	* Authentication Error
-
-* Add on -n to get netrc creditionals
-	* Invalid Content
-* So remove the long address, since the ampersands are definitely screwed up.  Now it looks like the playbackURI quoted in the search API.
+* Now download.  Note that with data sent via -d, curl will default to POST, so we must specify GET.
 	```
 	download.xml
 	<downloadRequest>
 	<playbackURI>rtsp://192.168.1.67/Streaming/tracks/101/?starttime=20200819T232140Z&amp;endtime=20200819T233957Z&amp;name=ch01_00000000008000000&amp;size=260587520</playbackURI>
 	</downloadRequest>
 	```
+  I use -n to use netrics, instead of specifying on the command line -- 
+  ```
+  machine 192.168.1.X login U password P
+	```
 
 	then do 
 	```
-	curl -n -d @download.xml 'http://192.168.1.67/ISAPI/ContentMgmt/download'
+  curl -n -X GET -d @[download xml file] 'http://192.168.1.67/ISAPI/ContentMgmt/download'
 	```
 
-	* Invalid Operation / methodNotAllowed
-
-* Try getting a token via 
-	```
-	curl -n --digest http://192.168.1.67/ISAPI/Security/token?format=json
-	```
-
-	but then nothing happens.
-
-And critically, I can't just remove the micro SD card -- as formatted, it's unreadable on my laptop!!
+With linux, we can also just remove the micro SD card and copy directly.
 
 ## Sources
 
