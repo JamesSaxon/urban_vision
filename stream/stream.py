@@ -376,7 +376,7 @@ if __name__ == '__main__':
     parser.add('--max_det_items', default = 50, type = int, help = "'k' parameter of max detections, for engine.")
 
     ## Detector Parameters
-    parser.add("--yolo", default = False, action = "store_true", help = "Switch to YOLO detector from SSD (SSD is the default).")
+    parser.add("--yolo", default = 0, type = int, choices = [320, 416, 608], help = "Switch to YOLO detector (320, 416, or 608) from SSD (SSD is the default).")
     parser.add("--select_roi", default = False, action = "store_true", help = "Interactively re-select the ROI.")
     parser.add("--roi_file", default = "", type = str, help = "Get the ROI for this file from a csv file (if it can be found).")
     parser.add("--roi", default = [], type = float, nargs = 4, help = "xmin, xmax, ymin, ymax")
