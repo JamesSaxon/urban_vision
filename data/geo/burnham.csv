@@ -1,0 +1,12 @@
+id,lon,lat,desc
+B,41.795661,-87.578945,bollard
+M,41.795652,-87.578918,man-hole
+NW,41.795672,-87.578905,north wall
+MHN,41.795671,-87.578918,north of man-hole cover
+SS,41.795637,-87.578869,stain on the south pavement
+C1S,41.795631,-87.578837,crack 1 south - not including stain crack
+C1N,41.795674,-87.578838,crack 1 north
+C2S,41.795632,-87.578800,crack 2 south - following perp. line rather than deviation
+C2N,41.795674,-87.578800,crack 2 north
+C3NC,41.795672,-87.578750,crack 3 north cover
+C3SS,41.795635,-87.578755,crack 3 south stain
