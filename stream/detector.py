@@ -165,7 +165,7 @@ class Detector():
                  categs = ["person"], thresh = 0.6, k = 1,
                  max_overlap = 0.5, min_area = 0,
                  loc = "upper center", edge_veto = 0,
-                 yolo = True, nms_thresh = 0.3,
+                 yolo = 0, nms_thresh = 0.3,
                  verbose = False):
 
 
@@ -340,7 +340,7 @@ class Detector():
         range_y = roi_ymax - roi_ymin
 
         frame_roi = frame[roi_ymin:roi_ymax, roi_xmin:roi_xmax]
-        blob = cv2.dnn.blobFromImage(frame_roi, 1 / 255, (416, 416),
+        blob = cv2.dnn.blobFromImage(frame_roi, 1 / 255, (self.yolo, self.yolo),
                                      swapRB = True, crop = False)
 
         self.yolo_model.setInput(blob)
