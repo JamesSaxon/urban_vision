@@ -15,4 +15,12 @@ The options should be self-explaining; run `./stream.py -h`.
 Settings can (and should!) be specified via a config file, 
   of which several examples can be found in the `conf/` directory.
 
+Using the GPU requires OpenCV to be compiled with the
+  appropriate CUDA/CUDART libraries.
+The other other packages needed can be installed using conda and pip:
+```
+conda install configargparse pandas scipy pi
+pip install pykalman
+```
+
 
