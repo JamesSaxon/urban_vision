@@ -1,0 +1,4 @@
+0 person
+1 bike
+2 dog
+3 stroller
