@@ -12,8 +12,13 @@ import tensorflow as tf
 print(tf.__version__)
 tf.get_logger().setLevel('WARNING')
 
+from tensorflow.python.client import device_lib
+
+print(device_lib.list_local_devices())
+
 import numpy as np
 import matplotlib
+import random
 
 from object_detection.utils import label_map_util
 from object_detection.utils import config_util
@@ -27,16 +32,30 @@ cv2pil = lambda x : Image.fromarray(cv2.cvtColor(x, cv2.COLOR_BGR2RGB))
 np2pil = lambda x : Image.fromarray(x)
 
 roi_dict = {
-  "clark_division"  : [0.22, 0.96, 0.10, 1.0],
-  "jackson_state"   : [0.11, 1.00, 0.04, 1.0],
-  "ogden_milwaukee" : [0.01, 1.00, 0.08, 1.0],
-  "ohio_orleans"    : [0.14, 0.94, 0.12, 1.0],
-  "sheridan_wilson" : [0.13, 0.87, 0.09, 1.0],
 
-  "lf/106"          : [0.00, 0.56, 0.28, 1.0],
-  "lf/108"          : [0.15, 0.84, 0.20, 1.0],
-  "lf/109"          : [0.35, 0.94, 0.27, 1.0],
-  "lf/120"          : [0.25, 0.96, 0.30, 1.0]
+  '1l/90_33st_NB1'        : [0.01, 1.00, 0.08, 1.00],
+  '1l/90_33st_NB2'        : [0.00, 0.85, 0.01, 1.00],
+  '1l/90_33st_NB4'        : [0.00, 0.90, 0.00, 1.00],
+  '1l/90_33st_NB5'        : [0.00, 1.00, 0.01, 1.00],
+  '1l/90_33st_NB6'        : [0.00, 0.88, 0.01, 1.00],
+
+  '1w/clark_grand'        : [0.34, 0.88, 0.09, 0.56],
+  '1w/lower_wacker'       : [0.00, 0.57, 0.14, 1.00],
+  '1w/state_adams_e'      : [0.00, 0.78, 0.09, 1.00],
+  '1w/state_jackson'      : [0.00, 0.83, 0.12, 1.00],
+  '1w/state_monroe_w'     : [0.26, 1.00, 0.15, 1.00],
+
+  'intx/clark_division'   : [0.18, 0.99, 0.05, 1.00],
+  'intx/ohio_orleans'     : [0.12, 1.00, 0.06, 1.00],
+  'intx/sheridan_wilson'  : [0.04, 1.00, 0.11, 1.00],
+  'intx/state_jackson'    : [0.02, 1.00, 0.06, 1.00],
+  'intx/wabash_roosevelt' : [0.00, 1.00, 0.08, 1.00],
+
+  'lf/106'                : [0.01, 0.59, 0.27, 0.96],
+  'lf/108'                : [0.18, 0.85, 0.12, 0.97],
+  'lf/109'                : [0.30, 0.96, 0.16, 1.00],
+  'lf/120'                : [0.23, 0.97, 0.16, 0.96],
+  'lf/213'                : [0.07, 0.72, 0.25, 0.94]
 
 }
 
@@ -205,8 +224,11 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
 
     cap.read()
 
-    training   = tf.io.TFRecordWriter(ouput + "_train.tfrecord")
-    validation = tf.io.TFRecordWriter(ouput + "_val.tfrecord")
+    if VAL:
+        training   = tf.io.TFRecordWriter(ouput + "_train.tfrecord")
+        validation = tf.io.TFRecordWriter(ouput + "_val.tfrecord")
+    else:
+        all_output = tf.io.TFRecordWriter(ouput + ".tfrecord")
 
     show_tqdm_bar = 0 if N > 999999 else N
     for ix in tqdm.tqdm(range(N), total = show_tqdm_bar):
@@ -246,8 +268,11 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
 
         if not record: continue
         
-        if ix % VAL: training  .write(record.SerializeToString())
-        else:        validation.write(record.SerializeToString())
+        if VAL:
+            if ix % VAL: training  .write(record.SerializeToString())
+            else:        validation.write(record.SerializeToString())
+        else:
+            all_output.write(record.SerializeToString())
 
 
         if show: 
@@ -258,8 +283,11 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
             if (cv2.waitKey(30) & 0xff) == 27: break
 
         
-    training  .close()
-    validation.close()
+    if VAL:
+        training  .close()
+        validation.close()
+    else:
+        all_output.close()
     
     cap.release()
     
@@ -271,12 +299,19 @@ def tag_videos(videos, model, jitter, thresh, total, skip, show, val, categs):
     detect_fn = get_model_detection_function(model)
     label_map = get_label_map()
 
-    print(glob(videos))
+    video_files = glob(videos)
+    video_files = random.choices(video_files, k = 10)
+    print(video_files)
 
-    for video in glob(videos):
-        print(video)
+    for video in video_files:
 
-        output = video.replace(".mp4", "")
+        output = video.replace(".mp4", "").replace("vids", "tfrecords")
+
+        ofile = "/".join(output.split("/")[:-1])
+
+        os.makedirs(ofile, exist_ok = True)
+
+        print(video, output, ofile)
 
         for tag in roi_dict:
             if tag in video:
@@ -285,7 +320,6 @@ def tag_videos(videos, model, jitter, thresh, total, skip, show, val, categs):
         records_from_stream(video, output, THRESH = thresh, ROI = roi, JITTER = jitter, 
                             N = total, NSKIP = skip,
                             VAL = val, CATEGS = categs, show = show)
-
 
 
 if __name__ == "__main__":
@@ -300,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument('--jitter', default = 0.0, help = "how much to move around the roi?", type = float)
     parser.add_argument('--show',   action = "store_true", default = False)
     parser.add_argument("--thresh", default = 0.3, type = float, help = "confidence threshold")
-    parser.add_argument("--val",   type = int, default = 5, help = "1 out of how many, to write to val?")
+    parser.add_argument("--val",   type = int, default = 0, help = "1 out of how many, to write to val?")
     parser.add_argument("--categs", default = ["car", "truck", "bus"], nargs = "+", help = "Types of objects to process -- must match labels")
     args = parser.parse_args()
 
