@@ -64,9 +64,12 @@ class BBox():
     
         # coordinates of the intersection rectangle
         xmin = max(self.xmin, other.xmin)
-        ymin = max(self.ymin, other.ymin)
         xmax = min(self.xmax, other.xmax)
+        ymin = max(self.ymin, other.ymin)
         ymax = min(self.ymax, other.ymax)
+
+        if xmin > xmax or ymin > ymax:
+            return None
     
         return BBox(xmin, xmax, ymin, ymax)
 
@@ -117,6 +120,9 @@ class Detection():
         self.x = self.xy[0]
         self.y = self.xy[1]
 
+        self.hloc = "center"
+        self.vloc = "middle"
+
         self.conf  = conf
         self.label = label
 
@@ -133,6 +139,9 @@ class Detection():
         self.x = self.xy[0]
         self.y = self.xy[1]
 
+        self.hloc = hloc
+        self.vloc = vloc
+
 
     def bbox_intersection(self, other):
     
@@ -142,6 +151,14 @@ class Detection():
     
         return self.box.max_fractional_intersection(other.box)
 
+    def set_bbox(self, new_box):
+
+        self.box = new_box
+        self.xy = self.box.loc(self.hloc, self.vloc)
+        self.x = self.xy[0]
+        self.y = self.xy[1]
+
+        self.area = self.box.area
 
 
 
@@ -165,19 +182,22 @@ class Detector():
                  categs = ["person"], thresh = 0.6, k = 1,
                  max_overlap = 0.5, min_area = 0,
                  loc = "upper center", edge_veto = 0,
-                 yolo = 0, nms_thresh = 0.3,
+                 yolo_path = "", yolo_size = 0, nms_thresh = 0.3,
+                 static_detections = "",
                  verbose = False):
 
 
         self.labels = dataset_utils.read_label_file(labels) if labels else None
 
-        self.yolo = yolo
-        if yolo:
+        self.yolo = (yolo_size > 0) and yolo_path
+        if self.yolo:
 
-            yolo_path    = os.path.abspath("../yolo/")
-            yolo_config  = os.path.join(yolo_path, "yolov3.cfg")
-            yolo_weights = os.path.join(yolo_path, "yolov3.weights")
-            yolo_labels  = os.path.join(yolo_path, "coco.names")
+            self.yolo_size = yolo_size
+
+            yolo_path    = os.path.abspath(yolo_path)
+            yolo_config  = os.path.join(yolo_path, yolo_path + "/cfg")
+            yolo_weights = os.path.join(yolo_path, yolo_path + "/wgts")
+            yolo_labels  = os.path.join(yolo_path, yolo_path + "/names")
             
             self.yolo_model = cv2.dnn.readNetFromDarknet(yolo_config, yolo_weights)
             self.yolo_model.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
@@ -194,6 +214,11 @@ class Detector():
 
             self.engine = DetectionEngine(model)
 
+        if static_detections:
+
+            self.static_detections = pd.read_csv(static_detections)
+
+        else: self.static_detections = None
 
         self.categs = categs
         self.ncategs = {li for li, l in self.labels.items() if l in categs}
@@ -202,6 +227,7 @@ class Detector():
         self.k      = k
 
         self.roi = None
+        self.roi_bbox = None
         self.xgrid = 1
         self.ygrid = 1
 
@@ -249,6 +275,8 @@ class Detector():
         self.xmax = roi["xmax"]
         self.ymin = roi["ymin"]
         self.ymax = roi["ymax"]
+
+        self.roi_bbox = BBox(self.xmin, self.xmax, self.ymin, self.ymax)
 
 
     def set_world_geometry(self, geofile, scale = 1, inv_binsize = 10):
@@ -311,10 +339,51 @@ class Detector():
         Run YOLO or SSD according to settings!
         """
 
-        if self.yolo: self.detect_yolo(frame, frame_id)
-        else:         self.detect_ssd (frame, frame_id)
+        self.detections = []
+
+        if self.static_detections is not None:
+            self.detect_static(frame, frame_id)
+        elif self.yolo:
+            self.detect_yolo(frame, frame_id)
+        else:
+            self.detect_ssd(frame, frame_id)
         
         return self.detections
+
+    def detect_static(self, frame, frame_id):
+
+        if frame_id is None: 
+            print("Frame ID must be specified for static detections.")
+            return
+
+        height, width = frame.shape[:2]
+
+        query = f"(frame == {frame_id}) & (label in @self.categs) & (conf >= {self.thresh})"
+
+        static_det_subset = self.static_detections.query(query)
+
+        self.detections = []
+        for di, det in static_det_subset.iterrows():
+
+            box_dict = {"xmin" : int(det.xmin * width),  "xmax" : int(det.xmax * width),
+                        "ymin" : int(det.ymin * height), "ymax" : int(det.ymax * height) }
+        
+            det = Detection(box_dict, det.conf, det.label, frame_id)
+
+            if self.roi_bbox:
+
+                intx = det.box.intersection(self.roi_bbox)
+                if intx is None: continue
+
+                det.set_bbox(intx)
+
+            if det.area / height / width < self.min_area: continue
+
+            det.set_reference_location(self.hloc, self.vloc)
+
+            self.detections.append(det)
+
+        self.all_detections.extend(self.detections)
 
 
     def detect_yolo(self, frame, frame_id = None):
@@ -336,11 +405,13 @@ class Detector():
             roi_xmin, roi_ymin = 0, 0
             roi_ymax, roi_xmax = frame.shape[:2]
 
+        height, width = frame.shape[:2]
+
         range_x = roi_xmax - roi_xmin
         range_y = roi_ymax - roi_ymin
 
         frame_roi = frame[roi_ymin:roi_ymax, roi_xmin:roi_xmax]
-        blob = cv2.dnn.blobFromImage(frame_roi, 1 / 255, (self.yolo, self.yolo),
+        blob = cv2.dnn.blobFromImage(frame_roi, 1 / 255, (self.yolo_size, self.yolo_size),
                                      swapRB = True, crop = False)
 
         self.yolo_model.setInput(blob)
@@ -355,7 +426,6 @@ class Detector():
             # loop over each of the detections
             for det in output:
             
-
                 # extract the class ID and confidence (i.e., probability) of
                 # the current object detection
                 scores = det[5:]
@@ -382,7 +452,7 @@ class Detector():
 
 
         self.detections = []
-        
+
         idxs = cv2.dnn.NMSBoxes(boxes, confs, self.thresh, self.nms_thresh)
 
         if not len(idxs): return self.detections
@@ -400,13 +470,12 @@ class Detector():
         
             det = Detection(box_dict, confs[i], label, frame_id)
             
-            if det.area < self.min_area: continue
+            if det.area / height / width < self.min_area: continue
 
             det.set_reference_location(self.hloc, self.vloc)
             self.detections.append(det)
             
         self.all_detections.extend(self.detections)
-
 
         return self.detections
 
@@ -419,6 +488,8 @@ class Detector():
 
         self.frame += 1
         if frame_id is None: frame_id = self.frame 
+
+        height, width = frame.shape[:2]
 
         if self.roi: 
             roi_xmin = self.xmin
@@ -476,10 +547,12 @@ class Detector():
                                                            keep_aspect_ratio = False, 
                                                            relative_coord = False, top_k = self.k)
 
+            # print(len(raw_detections), "detections")
             for iobj, obj in enumerate(raw_detections):
 
                 # If the label is irrelevant, just get out.
                 label = None
+                # print(obj.score, obj.label_id, obj.bounding_box.flatten())
                 if self.labels is not None and len(self.categs):
 
                     if obj.label_id not in self.ncategs: continue
@@ -504,7 +577,8 @@ class Detector():
                 box_dict = {"xmin" : box_xmin, "xmax" : box_xmax, "ymin" : box_ymin, "ymax" : box_ymax}
 
                 det = Detection(box_dict, obj.score, label, frame_id)
-                if det.area < self.min_area: continue
+
+                if det.area / height / width < self.min_area: continue
 
                 det.set_reference_location(self.hloc, self.vloc)
 
@@ -545,7 +619,8 @@ class Detector():
             return
 
 
-        df = df[["frame", "conf", "label", "x", "y", "area", "xmin", "xmax", "ymin", "ymax"]]
+        df = df[["frame", "conf", "label", # "x", "y", "area",
+                 "xmin", "xmax", "ymin", "ymax"]]
 
         df.sort_values(by = ["frame", "conf"]).to_csv(file_name, float_format = "%.3f", header = True, index = False)
 

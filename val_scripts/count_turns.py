@@ -14,17 +14,21 @@ import itertools
 import argparse
 
 parser = argparse.ArgumentParser(description='')
-parser.add_argument('--video',   type = str, default = "/home/jsaxon/proj/vid/city/bike_path_210901_173435.mp4")
-parser.add_argument('--tracks',  type = str, default = "/home/jsaxon/proj/vid/city/bike_path_210901_173435_tr.csv")
-parser.add_argument('--regions', type = str, default = "../data/turn_boxes/north_side_bike_path.geojson")
-parser.add_argument('--counts',  type = str, default = "")
-parser.add_argument('--min_det', type = int, default = 2)
-parser.add_argument('--alpha',   type = float, default = 0.1)
+parser.add_argument('--video',    type = str, default = "/home/jsaxon/proj/vid/city/bike_path_210901_173435.mp4")
+parser.add_argument('--tracks',   type = str, default = "/home/jsaxon/proj/vid/city/bike_path_210901_173435_tr.csv")
+parser.add_argument('--regions',  type = str, default = "../data/turn_boxes/north_side_bike_path.geojson")
+parser.add_argument('--counts',   type = str, default = "")
+parser.add_argument('--min_det',  type = int, default = 2)
+parser.add_argument('--alpha',    type = float, default = 0.1)
+parser.add_argument('--no_count', action = "store_true")
+parser.add_argument('--scale',    type = float, default = 1.0)
+parser.add_argument('--roi_file', type = str, default = "roi.conf")
 args  = parser.parse_args()
 
 ALPHA = args.alpha
 MIN_DET = args.min_det
 COLORS = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (0, 255, 255), (255, 0, 255)]
+SCALE = args.scale
 
 if not args.tracks and args.video:
     template = args.video.replace(".mp4", "").replace(".MOV", "")
@@ -45,6 +49,19 @@ if not args.regions:
         print("Must provide regions, somehow!!")
         sys.exit()
 
+ROI = None
+if args.roi_file:
+
+    roi_df = pd.read_csv(args.roi_file)
+
+    indices = [si in args.video for si in roi_df.file]
+
+    if any(indices):
+
+        index = indices.index(True)
+        ROI = roi_df.loc[index].to_dict()
+        print(ROI)
+
 
 if not args.counts and args.tracks:
     args.counts = args.video.replace("_tr.csv", "_turn_counts.csv")
@@ -57,10 +74,10 @@ def set_click_location(evt, x, y, flags, params):
 
     if evt == cv2.EVENT_LBUTTONDBLCLK:
         finished = True
-        xpt, ypt = x, y 
+        xpt, ypt = int(x * SCALE), int(y * SCALE) 
 
     if evt == cv2.EVENT_LBUTTONDOWN:
-        xpt, ypt = x, y 
+        xpt, ypt = int(x * SCALE), int(y * SCALE) 
 
 
 
@@ -75,7 +92,14 @@ def build_regions(vfile, rfile):
     ret, orig_frame = vid.read()
     vid.release()
 
-    cv2.imshow("image", orig_frame)
+    FRAMEX, FRAMEY = orig_frame.shape[1], orig_frame.shape[0]
+
+    orig_frame_disp = cv2.resize(orig_frame, None,
+                                 fx = 1 / SCALE, fy = 1 / SCALE,
+                                 interpolation = cv2.INTER_AREA)
+
+    cv2.imshow("image", orig_frame_disp)
+
     cv2.setMouseCallback("image", set_click_location)
 
     OK = False
@@ -129,7 +153,6 @@ def build_regions(vfile, rfile):
         if key == ord("c"):
             poly = None
 
-
         if xpt is not None:
 
             ## Add the first point
@@ -146,7 +169,12 @@ def build_regions(vfile, rfile):
                 poly = np.concatenate((poly, poly[:1,]))
 
                 cv2.polylines(dec_img, [poly], False, (255, 255, 255), 3)
-                cv2.imshow("image", dec_img)
+
+                dec_img_disp = cv2.resize(dec_img, None,
+                                          fx = 1 / SCALE, fy = 1 / SCALE,
+                                          interpolation = cv2.INTER_AREA)
+               
+                cv2.imshow("image", dec_img_disp)
 
                 print("Enter a unique label for this polygon:", end = " ", flush = True)
 
@@ -163,7 +191,6 @@ def build_regions(vfile, rfile):
 
                     break
 
-
                 polygon = Polygon(poly)
 
                 if polygon.exterior.is_ccw:
@@ -177,10 +204,20 @@ def build_regions(vfile, rfile):
 
                 poly = None
 
-                xpt, ypt, finished = None, None, False
+            xpt, ypt, finished = None, None, False
 
-                
-        cv2.imshow("image", dec_img)
+        if ROI:
+            dec_img = cv2.rectangle(dec_img,
+                                    tuple((int(ROI["xmin"] * FRAMEX), int(ROI["ymin"] * FRAMEY))),
+                                    tuple((int(ROI["xmax"] * FRAMEX), int(ROI["ymax"] * FRAMEY))),
+                                    (255, 255, 255), 3)
+
+        dec_img_disp = cv2.resize(dec_img, None,
+                                  fx = 1 / SCALE, fy = 1 / SCALE,
+                                  interpolation = cv2.INTER_AREA)
+               
+        cv2.imshow("image", dec_img_disp)
+
 
     if not len(gpd_polygons): sys.exit()
 
@@ -194,6 +231,8 @@ def build_regions(vfile, rfile):
 
 
 regions = build_regions(args.video, args.regions)
+
+if args.no_count: sys.exit()
 
 
 

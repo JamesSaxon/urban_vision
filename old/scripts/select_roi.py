@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 import os
 import argparse
@@ -14,7 +14,6 @@ def get_roi(video, csv, dxy, fps, skip):
 
     for f in range(fps * skip):
         ret, img = vid.read()
-        print(f)
 
     if not ret:
         print("Video file '{}' is not valid.".format(vinput))

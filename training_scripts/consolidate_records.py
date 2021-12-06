@@ -32,7 +32,9 @@ image_feature_description = {
    'image/video'              : tf.io.FixedLenFeature((), tf.string),
    'image/height'             : tf.io.FixedLenFeature((), tf.int64),
    'image/width'              : tf.io.FixedLenFeature((), tf.int64),
-   'image/source_id'          : tf.io.FixedLenFeature((), tf.string),
+   'image/tag'                : tf.io.FixedLenFeature((), tf.string),
+   'image/timestamp'          : tf.io.FixedLenFeature((), tf.string),
+   'image/frame_id'           : tf.io.FixedLenFeature((), tf.int64),
    'image/encoded'            : tf.io.FixedLenFeature((), tf.string),
    'image/format'             : tf.io.FixedLenFeature((), tf.string),
    'image/object/bbox/xmin'   : tf.io.FixedLenSequenceFeature([], dtype = tf.float32, allow_missing = True),
@@ -43,6 +45,7 @@ image_feature_description = {
    'image/object/class/label' : tf.io.FixedLenSequenceFeature([], dtype = tf.int64  , allow_missing = True),
    'image/object/class/text'  : tf.io.FixedLenSequenceFeature([], dtype = tf.string , allow_missing = True),
 }
+
 
 def _parse_image_function(protob):
     # Parse the input tf.Example proto using the dictionary above.
@@ -67,9 +70,13 @@ def make_record(original, detection_dict):
 
     return tf.train.Example(features = tf.train.Features(feature={
         'image/video'              : _bytes_feature(original['image/video'].numpy()),
-        'image/source_id'          : _bytes_feature(original['image/source_id'].numpy()),
+        'image/frame_id'           : _int64_feature(original['image/frame_id'].numpy()),
+        'image/tag'                : _bytes_feature(original['image/tag'].numpy()),
+        'image/timestamp'          : _bytes_feature(original['image/timestamp'].numpy()),
         'image/encoded'            : _bytes_feature(original["image/encoded"].numpy()),
         'image/format'             : _bytes_feature(original["image/format"].numpy()),
+
+        'image/sanitized'          : _int64_feature(False),
 
         'image/height'             : _int64_feature(d["height"]),
         'image/width'              : _int64_feature(d["width"]),
@@ -136,7 +143,7 @@ random.shuffle(parsed_list)
 
 output_records = tf.io.TFRecordWriter(args.ofile)
 
-for record in parsed_list:
+for ix, record in enumerate(parsed_list):
 
     detections = get_detections_dict(record)
 
@@ -149,5 +156,6 @@ for record in parsed_list:
 output_records.close()
 
 print()
+print(ix+1, "records")
 print(label_dict)
 

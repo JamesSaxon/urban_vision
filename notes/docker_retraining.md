@@ -66,8 +66,11 @@ tensorboard --logdir /models/research/learn_cars/train &
 
 ```
 ls -ltr learn_ped/train/model.ckpt-*index
-./convert_checkpoint_to_edgetpu_tflite.sh --checkpoint_num 111
+./convert_checkpoint_to_edgetpu_tflite.sh --checkpoint_num 2500
+```
 
+and then back outside again:
+```
 edgetpu_compiler --min_runtime_version 13 ~/proj/chalk/models/research/learn_ped/models/output_tflite_graph.tflite
 ```
 

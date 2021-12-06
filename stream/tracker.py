@@ -64,6 +64,8 @@ class Object():
 
         self.kalman_track_cov = kalman_track_cov
 
+        self.tracker = None
+
 
     def make_kalman(self):
 
@@ -205,16 +207,16 @@ class Object():
         return np.array([means[:,0], means[:,2], times]).T
 
 
-    def out_of_roi(self, t, roi, roi_buffer = 0):
+    def out_of_roi(self, t, roi, roi_point_veto = 0):
 
         if roi is None: return False
 
         x, y = self.predict_location(t)
 
-        if x < roi["xmin"] + roi_buffer: return True
-        if x > roi["xmax"] - roi_buffer: return True
-        if y < roi["ymin"] + roi_buffer: return True
-        if y > roi["ymax"] - roi_buffer: return True
+        if x < roi["xmin"] + roi_point_veto: return True
+        if x > roi["xmax"] - roi_point_veto: return True
+        if y < roi["ymin"] + roi_point_veto: return True
+        if y > roi["ymax"] - roi_point_veto: return True
 
         return False
 
@@ -309,10 +311,11 @@ class Tracker():
             raise(ValueError, "Horizontal location must be left, center, or right.")
 
 
-    def set_roi(self, roi, roi_buffer = 0):
+    def set_roi(self, roi, roi_buffer = 0, roi_point_veto = 0):
 
         self.roi = roi
         self.roi_buffer = roi_buffer
+        self.roi_point_veto = roi_point_veto
 
 
     def new_object(self):
@@ -350,6 +353,8 @@ class Tracker():
 
     def edge_veto(self, box):
 
+        if self.roi_buffer == -1: return False
+
         if box.xmin < self.roi["xmin"] + self.roi_buffer: return True
         if box.xmax > self.roi["xmax"] - self.roi_buffer: return True
         if box.ymin < self.roi["ymin"] + self.roi_buffer: return True
@@ -369,7 +374,7 @@ class Tracker():
             if self.edge_veto(o.box): o.edge_strikes += 1
 
             if self.t - o.last_detection > self.MAX_MISSING or \
-               o.out_of_roi(t = self.t, roi = self.roi, roi_buffer = self.roi_buffer) or \
+               o.out_of_roi(t = self.t, roi = self.roi, roi_point_veto = self.roi_point_veto) or \
                o.edge_strikes > Tracker.STRIKES: 
                 o.deactivate(self.t)
 
@@ -737,6 +742,15 @@ class Tracker():
         if self.oid:
 
             df_out = pd.concat([o.df for o in self.objects.values()])
+            df_out.conf = df_out.conf.round(4)
+
+            df_out = df_out[["o", "t", "ts", "x", "y", "conf", "area"]]
+
+            if df_out.ts.isna().all():
+                df_out.drop("ts", axis = 1, inplace = True)
+
+            df_out = df_out[~df_out.x.isnull()].copy()
+
             df_out.to_csv(output, index = False)
 
         else:

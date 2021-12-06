@@ -46,12 +46,17 @@ def get_roi(vinput, scale, roi, roi_file = "", select_roi = False):
         roi_file, select_roi = "", True
 
     if not roi and roi_file:
-        roi_df = pd.read_csv(roi_file, index_col = "file")
+        roi_df = pd.read_csv(roi_file)
 
         # If the video is found, then rescale and return.
         # If it is not, default to the opencv method.
-        if vinput in roi_df.index:
-            ROI = roi_df.loc[vinput].to_dict()
+
+        indices = [si in vinput for si in roi_df.file]
+
+        if any(indices):
+
+            index = indices.index(True)
+            ROI = roi_df.loc[index].to_dict()
             ROI = [int(ROI["xmin"] * FRAMEX), 
                    int(ROI["xmax"] * FRAMEX), 
                    int(ROI["ymin"] * FRAMEY),
@@ -127,7 +132,7 @@ def detect_objects_in_frame(qdetector, qtracker, detector,
         try: nframe, frame, scaled = qdetector.get(timeout = 0.1)
         except: continue
 
-        detections = detector.detect(frame)
+        detections = detector.detect(frame, nframe)
 
         if SHOW_HEAT: 
 
@@ -219,13 +224,13 @@ def write_frame_to_stream(video_queue,
     VIDEO_OUT.release()
 
 
-def main(vinput, output, odir,
+def main(vinput, output, odir, tag, 
          nframes, nskip,
-         yolo, model, labels, thresh, categs, max_det_items,
-         roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer,
+         static_detections, yolo_path, yolo_size, model, labels, thresh, categs, max_det_items,
+         roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer, roi_point_veto,
          no_tracker, match_method, max_missing, max_distance, min_distance_or,
          predict_matches, kalman_track, max_track, candidate_obs,
-         draw_detector, kalman_viz, contrail, scale, view, no_output, no_video_output, pretty_video, 
+         draw_detector, kalman_viz, contrail, scale, view, no_output, no_csv_output, no_video_output, pretty_video, 
          show_heat, heat_frac, heat_fade, geometry, verbose, 
          roi_file, select_roi, config):
     """
@@ -250,10 +255,12 @@ def main(vinput, output, odir,
 
     ##  And the output video file.
     video_out = None
-    if not no_video_output: video_out = output + "_det.mp4"
+    if not no_video_output:
+        video_out = output + "_det" + tag + ".mp4"
 
     ##  Build the detector, including the TF engine.
-    detector = det.Detector(yolo = yolo, model = model, labels = labels, categs = categs, thresh = thresh, k = max_det_items,
+    detector = det.Detector(yolo_size = yolo_size, yolo_path = yolo_path, model = model, static_detections = static_detections,
+                            labels = labels, categs = categs, thresh = thresh, k = max_det_items,
                             max_overlap = max_overlap, loc = roi_loc, edge_veto = edge_veto, min_area = min_area, verbose = False)
 
     detector.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX})
@@ -274,7 +281,8 @@ def main(vinput, output, odir,
                              kalman_viz_cov = kalman_viz, contrail = contrail)
 
         tracker.set_roi({"xmin" : XMIN, "xmax" : XMAX, "ymin" : YMIN, "ymax" : YMAX},
-                        roi_buffer = (YMAX - YMIN) * roi_buffer)
+                        roi_buffer = (YMAX - YMIN) * roi_buffer,
+                        roi_point_veto = (YMAX - YMIN) * roi_point_veto)
 
     draw_frames = bool(view or not no_video_output)
 
@@ -347,22 +355,23 @@ def main(vinput, output, odir,
         video_thread.join()
 
     # Unless told not to, let's write CSV output files.
-    if not no_output:
+    if not no_csv_output:
 
-        detector.write(output + "_det.csv")
-        if tracker: tracker.write(output + "_tr.csv")
+        detector.write(output + "_det" + tag + ".csv")
+        if tracker: tracker.write(output + "_tr" + tag + ".csv")
 
 
 
 if __name__ == '__main__':
 
-    parser = configargparse.ArgParser(default_config_files = ['./stream_defaults.conf'])
+    parser = configargparse.ArgParser(default_config_files = ['conf/stream_defaults.conf'])
     parser.add('-c', '--config', required = False, is_config_file = True, help = 'Path for config file.')
 
     ## Basic inputs
     parser.add('-i', '--vinput', help = 'Directory of input images.', required=True)
     parser.add('-o', '--output', help = 'Name of output file, by default derived from input name.', default = "")
     parser.add('--odir',         help = 'Name of output directory, by default derived from input name.', default = "")
+    parser.add('--tag',          help = 'Tag name for file.', default = "")
 
     ## What to process
     parser.add("-f", "--nframes", default = float("inf"), type = float, help = "Total number of frames to process")
@@ -376,7 +385,9 @@ if __name__ == '__main__':
     parser.add('--max_det_items', default = 50, type = int, help = "'k' parameter of max detections, for engine.")
 
     ## Detector Parameters
-    parser.add("--yolo", default = 0, type = int, choices = [320, 416, 608], help = "Switch to YOLO detector (320, 416, or 608) from SSD (SSD is the default).")
+    parser.add("--static_detections", default = "", type = str, help = "Static detection file, instead of re-running ML.")
+    parser.add("--yolo_size", default = 0, type = int, choices = [0, 320, 416, 608], help = "Switch to YOLO detector (320, 416, or 608) from SSD (SSD is the default).")
+    parser.add("--yolo_path", default = "../yolo/v3/", type = str, help = "Path to YOLO directory.")
     parser.add("--select_roi", default = False, action = "store_true", help = "Interactively re-select the ROI.")
     parser.add("--roi_file", default = "", type = str, help = "Get the ROI for this file from a csv file (if it can be found).")
     parser.add("--roi", default = [], type = float, nargs = 4, help = "xmin, xmax, ymin, ymax")
@@ -386,7 +397,8 @@ if __name__ == '__main__':
     parser.add("--max_overlap", default = 0.25, type = float, help = "Maximum that detections can overlap, as max(A_i / Intersection).")
     parser.add("--min_area", default = 0, type = float, help = "Minimum size of a detection.")
     parser.add("--edge_veto", default = 0.005, type = float, help = "Veto detections within this fractional distance of the edge of a (sub) ROI when DETECTING.")
-    parser.add("--roi_buffer", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, within this fractional distance of the ROI, when TRACKING.")
+    parser.add("--roi_buffer", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, with *bounding boxes* within this fractional distance of the ROI, when TRACKING.")
+    parser.add("--roi_point_veto", default = 0.02, type = float, help = "Ignore new objects or delete existing ones, with *reference points* near the ROI, when TRACKING.")
 
     ## Tracker Parameters
     parser.add("--no_tracker", default = False, action = "store_true", help = "Whether to turn off the tracker.")
@@ -406,6 +418,7 @@ if __name__ == '__main__':
     parser.add("--view", default = False, action = "store_true", help = "View the feed 'live' (or not)")
     parser.add("--no_output", default = False, action = "store_true", help = "Do not record ANY outputs -- csv or mp4.")
     parser.add("--no_video_output", default = False, action = "store_true", help = "Do not record the stream.")
+    parser.add("--no_csv_output", default = False, action = "store_true", help = "Do not record CSVs.")
     parser.add("--pretty_video", default = False, action = "store_true", help = "Shade out the un-detected space.")
 
     parser.add("--draw_detector", default = False, action = "store_true", help = configargparse.SUPPRESS)
@@ -421,7 +434,9 @@ if __name__ == '__main__':
 
     if args.verbose: print(parser.format_values()) ## Where did the settings come from!?
 
-    if args.no_output: args.no_video_output = True
+    if args.no_output: 
+        args.no_video_output = True
+        args.no_csv_output = True
 
     if not args.output: # if it's not defined, get it from the input file.
 
@@ -430,6 +445,9 @@ if __name__ == '__main__':
 
         for f in [".gif", ".mov", ".MOV", ".mp4"]: output = output.replace(f, "")
         args.output = output
+
+    if args.tag:
+        args.tag = "_" + args.tag
 
     if args.no_tracker and (not args.no_video_output or args.view): args.draw_detector = True
     else: args.draw_detector = False
