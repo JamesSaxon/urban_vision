@@ -1,20 +1,19 @@
-#!/usr/bin/env python
+#!/home/jsaxon/.conda/envs/tf-25-det/bin/python
 
 import os, sys
-sys.path.append("/media/jsaxon/brobdingnag/projects/urban_vision/models")
-sys.path.append("/media/jsaxon/brobdingnag/projects/urban_vision/models/research")
 
 import tqdm
 
 from glob import glob
 
 import tensorflow as tf
-print(tf.__version__)
+
+# print(tf.__version__)
 tf.get_logger().setLevel('WARNING')
 
 from tensorflow.python.client import device_lib
 
-print(device_lib.list_local_devices())
+# print(device_lib.list_local_devices())
 
 import numpy as np
 import matplotlib
@@ -61,7 +60,7 @@ roi_dict = {
 
 
 ## Load the labels.
-def get_label_map(path = 'models/research/object_detection/data/mscoco_label_map.pbtxt'):
+def get_label_map(path = '/home/jsaxon/models-det/research/object_detection/data/mscoco_label_map.pbtxt'):
 
     label_map = label_map_util.load_labelmap(path)
     label_map = label_map_util.get_label_map_dict(label_map, use_display_name = True)
@@ -72,8 +71,8 @@ def get_label_map(path = 'models/research/object_detection/data/mscoco_label_map
 def get_model_detection_function(model = "centernet_hourglass104_512x512_coco17_tpu-8"):
     """Get a tf.function for detection."""
 
-    pipeline_config = f'models/research/object_detection/configs/tf2/{model}.config'
-    model_dir       = f'models/research/object_detection/test_data/checkpoint/{model}/'
+    pipeline_config = f'/home/jsaxon/models-det/research/object_detection/configs/tf2/{model}.config'
+    model_dir       = f'/home/jsaxon/models-det/research/object_detection/test_data/{model}/checkpoint/'
     
     # Load pipeline config and build a detection model
     configs = config_util.get_configs_from_pipeline_file(pipeline_config)
@@ -99,6 +98,23 @@ def get_model_detection_function(model = "centernet_hourglass104_512x512_coco17_
 
 
 
+def get_nms_mask(width, height, boxes, confs, THRESH, NMS_THRESH = 0.3):
+
+    box_list = [[int(xmin * width), int(ymin * height), 
+                 int((xmax - xmin) * width), int((ymax - ymin) * height)]
+                for ymin, xmin, ymax, xmax in boxes]
+
+    conf_list = list(confs)
+
+    idxs = cv2.dnn.NMSBoxes(box_list, conf_list, THRESH, NMS_THRESH)
+
+    mask = np.zeros(confs.shape[0]).astype(bool)
+    mask[idxs] = True
+
+    return mask
+
+
+
 CATEGORY_OFFSET = 1
 
 def _int64_feature(value):      return tf.train.Feature(int64_list = tf.train.Int64List(value = [value]))
@@ -108,8 +124,8 @@ def _bytes_list_feature(value): return tf.train.Feature(bytes_list = tf.train.By
 def _float_list_feature(value): return tf.train.Feature(float_list = tf.train.FloatList(value =  value ))
 
 
-def create_tfrecord(img, detections, thresh = 0.3, 
-                    categories = ["person"], 
+def create_tfrecord(img, detections, thresh = 0.3, nms_thresh = 1, 
+                    categories = ["person"], write_empty_frames = True,
                     video_name = "X", frame_id = 0):
     '''
     Converts a dictionary of features for a single frame to a tf_example object.
@@ -118,6 +134,10 @@ def create_tfrecord(img, detections, thresh = 0.3,
     ## Fixed values to pass in.
     video         = str.encode(video_name)
     source_id     = str.encode(str("{:05d}".format(frame_id)))
+
+    video_tags    = video_name.split("/")
+    tag           = str.encode("/".join(video_tags[-3:-1]))
+    timestamp     = str.encode(video_tags[-1].replace(".mp4", ""))
     
     height        = img.shape[0]
     width         = img.shape[1]
@@ -131,33 +151,52 @@ def create_tfrecord(img, detections, thresh = 0.3,
     scores  = detections['detection_scores'] [0]
     classes = detections['detection_classes'][0]
 
+    if not write_empty_frames and len(classes) == 0: return False
+
     classes = np.array(classes).astype(int) + CATEGORY_OFFSET
 
     keep_categories = {label_map[k] : k for k in categories}
     keep_detections = np.isin(classes, list(keep_categories)) & (scores > thresh)
-
-    if not keep_detections.numpy().any(): return False
+     
+    if not write_empty_frames and not keep_detections.numpy().any(): return False
     
-    boxes = boxes[keep_detections]
-    classes = list(classes[keep_detections])
+    boxes  = np.array(boxes[keep_detections])
+    scores = np.array(scores[keep_detections]).astype(float)
+    classes = classes[keep_detections]
+
+    # print(video, source_id)
+
+    ## NMS only on the matching classes...
+    if nms_thresh < 1:
+
+        nms_mask = get_nms_mask(width, height, boxes, scores, nms_thresh)
+
+        boxes   = boxes[nms_mask]
+        scores  = scores[nms_mask]
+        classes = classes[nms_mask]
+
+    if not write_empty_frames and not scores.size: return False
 
     classes_text = []
     for label in classes:
         classes_text.append(keep_categories[label].encode('utf-8'))
-                                   
-    np_box = np.array(boxes).astype(float)
-    xmins = list(np_box[:,1]) 
-    xmaxs = list(np_box[:,3])
-    ymins = list(np_box[:,0]) 
-    ymaxs = list(np_box[:,2]) 
 
-    scores = list(np.array(scores[keep_detections]).astype(float))
+    classes = list(classes)
+    scores  = list(scores)
+
+    xmins   = list(boxes[:,1]) 
+    xmaxs   = list(boxes[:,3])
+    ymins   = list(boxes[:,0]) 
+    ymaxs   = list(boxes[:,2]) 
+
                                
     record = tf.train.Example(features = tf.train.Features(feature={
         'image/video'              : _bytes_feature(video),
         'image/height'             : _int64_feature(height),
         'image/width'              : _int64_feature(width),
-        'image/source_id'          : _bytes_feature(source_id),
+        'image/tag'                : _bytes_feature(tag),
+        'image/timestamp'          : _bytes_feature(timestamp),
+        'image/frame_id'           : _int64_feature(frame_id),
         'image/encoded'            : _bytes_feature(image_encoded),
         'image/format'             : _bytes_feature(image_format),
         'image/object/bbox/xmin'   : _float_list_feature(xmins),
@@ -202,7 +241,7 @@ def paint_detections(img, detections, categories = ["person"], thresh = 0.3, cat
 
 
 
-def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEGS = ["person"], N = 100, NSKIP = 10, VAL = 5, show = False):
+def records_from_stream(video, output, THRESH = 0.35, NMS_THRESH = 1, ROI = [], JITTER = 0, CATEGS = ["person"], N = 100, NSKIP = 10, VAL = 5, show = False, overwrite = True):
 
     cap = cv2.VideoCapture(video)
 
@@ -222,21 +261,35 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
 
     jXMIN, jXMAX, jYMIN, jYMAX = 0, 0, 0, 0
 
-    cap.read()
-
     if VAL:
-        training   = tf.io.TFRecordWriter(ouput + "_train.tfrecord")
-        validation = tf.io.TFRecordWriter(ouput + "_val.tfrecord")
-    else:
-        all_output = tf.io.TFRecordWriter(ouput + ".tfrecord")
 
+        if not overwrite and os.path.exists(output + "_train.tfrecord"): 
+            print("files already exists")
+            return 
+
+        training   = tf.io.TFRecordWriter(output + "_train.tfrecord")
+        validation = tf.io.TFRecordWriter(output + "_val.tfrecord")
+    else:
+
+        if not overwrite and os.path.exists(output + ".tfrecord"): 
+            print("file already exists")
+            return 
+
+        print("creating", output + ".tfrecord")
+        all_output = tf.io.TFRecordWriter(output + ".tfrecord")
+
+
+    frame_id = 0
     show_tqdm_bar = 0 if N > 999999 else N
-    for ix in tqdm.tqdm(range(N), total = show_tqdm_bar):
+    for ix in tqdm.tqdm(range(N), total = show_tqdm_bar, desc = output):
 
         for xi in range(NSKIP): 
+
             ret, cv_img = cap.read()
+            frame_id += 1
 
             if not ret: break
+
         if not ret: break
 
         if ROI: 
@@ -248,9 +301,9 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
                 jYMAX = int(HEIGHT * JITTER * (np.random.rand() * 2 - 1))
 
                 if jXMIN + XMIN < 0:      jXMIN = -XMIN
-                if jXMAX + XMAX > WIDTH:  jXMIN = WIDTH  - XMAX - 1
+                if jXMAX + XMAX > WIDTH:  jXMAX = WIDTH  - XMAX
                 if jYMIN + YMIN < 0:      jYMIN = -YMIN
-                if jYMAX + YMAX > HEIGHT: jYMIN = HEIGHT - YMAX - 1
+                if jYMAX + YMAX > HEIGHT: jYMAX = HEIGHT - YMAX
 
 
             cv_img = cv_img[YMIN+jYMIN:YMAX+jYMAX,XMIN+jXMIN:XMAX+jXMAX,:]
@@ -261,10 +314,11 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
 
         detections, predictions_dict, shapes = detect_fn(tf_img)
 
-        record = create_tfrecord(cv_img, detections, thresh = THRESH, 
+        record = create_tfrecord(cv_img, detections, 
+                                 nms_thresh = NMS_THRESH, thresh = THRESH, 
                                  categories = CATEGS,
                                  video_name = video, 
-                                 frame_id = (ix+1) * NSKIP)
+                                 frame_id = frame_id)
 
         if not record: continue
         
@@ -293,14 +347,14 @@ def records_from_stream(video, ouput, THRESH = 0.35, ROI = [], JITTER = 0, CATEG
     
 
 global detect_fn, label_map
-def tag_videos(videos, model, jitter, thresh, total, skip, show, val, categs):
+def tag_videos(videos, model, jitter, thresh, nms, total, skip, show, val, categs, no_overwrite):
 
     global detect_fn, label_map
     detect_fn = get_model_detection_function(model)
     label_map = get_label_map()
 
     video_files = glob(videos)
-    video_files = random.choices(video_files, k = 10)
+    # video_files = set(random.choices(video_files, k = 5))
     print(video_files)
 
     for video in video_files:
@@ -311,15 +365,16 @@ def tag_videos(videos, model, jitter, thresh, total, skip, show, val, categs):
 
         os.makedirs(ofile, exist_ok = True)
 
-        print(video, output, ofile)
-
         for tag in roi_dict:
             if tag in video:
                 roi = roi_dict[tag]
 
-        records_from_stream(video, output, THRESH = thresh, ROI = roi, JITTER = jitter, 
+        records_from_stream(video, output, THRESH = thresh, 
+                            NMS_THRESH = nms,
+                            ROI = roi, JITTER = jitter, 
                             N = total, NSKIP = skip,
-                            VAL = val, CATEGS = categs, show = show)
+                            VAL = val, CATEGS = categs, show = show,
+                            overwrite = not no_overwrite)
 
 
 if __name__ == "__main__":
@@ -327,15 +382,17 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--videos', required = True, type = str)
-    parser.add_argument('--model',  type = str, default = "centernet_hourglass104_512x512_coco17_tpu-8")
-    parser.add_argument('--total',  default = 1000000, help = 'How many frames', type = int)
-    parser.add_argument('--skip',   default = 150, help = "1 in how many?", type = int)
-    parser.add_argument('--jitter', default = 0.0, help = "how much to move around the roi?", type = float)
-    parser.add_argument('--show',   action = "store_true", default = False)
-    parser.add_argument("--thresh", default = 0.3, type = float, help = "confidence threshold")
-    parser.add_argument("--val",   type = int, default = 0, help = "1 out of how many, to write to val?")
-    parser.add_argument("--categs", default = ["car", "truck", "bus"], nargs = "+", help = "Types of objects to process -- must match labels")
+    parser.add_argument('--videos',       required = True, type = str)
+    parser.add_argument('--model',        type = str, default = "efficientdet_d5_coco17_tpu-32")
+    parser.add_argument('--total',        default = 1000000, help = 'How many frames', type = int)
+    parser.add_argument('--skip',         default = 150, help = "1 in how many?", type = int)
+    parser.add_argument('--jitter',       default = 0.1, help = "how much to move around the roi?", type = float)
+    parser.add_argument('--show',         action = "store_true", default = False)
+    parser.add_argument("--thresh",       default = 0.1, type = float, help = "confidence threshold")
+    parser.add_argument("--nms",          default = 0.3, type = float, help = "nms threshold")
+    parser.add_argument("--val",          type = int, default = 0, help = "1 out of how many, to write to val?")
+    parser.add_argument("--categs",       default = ["car", "truck", "bus"], nargs = "+", help = "Types of objects to process -- must match labels")
+    parser.add_argument('--no_overwrite', action = "store_true", default = False)
     args = parser.parse_args()
 
     tag_videos(**vars(args))
