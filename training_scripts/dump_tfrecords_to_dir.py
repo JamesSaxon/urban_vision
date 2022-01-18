@@ -31,6 +31,7 @@ os.makedirs(OUTPUT_PATH, exist_ok = True)
 for tag in ["TEST", "TRAIN"]:
     os.makedirs(f"{OUTPUT_PATH}/{tag}",            exist_ok = True)
     os.makedirs(f"{OUTPUT_PATH}/{tag}/labels",     exist_ok = True)
+    os.makedirs(f"{OUTPUT_PATH}/{tag}/gt",         exist_ok = True)
     os.makedirs(f"{OUTPUT_PATH}/{tag}/JPEGImages", exist_ok = True)
 
 
@@ -104,18 +105,23 @@ for ix, frame in tqdm(enumerate(parsed_dataset), total = total_records):
     cv2.imwrite(f"{OUTPUT_PATH}/JPEGImages/{n_img:05d}.jpg", image)
     cv2.imwrite(f"{OUTPUT_PATH}/{tag}/JPEGImages/{n_img:05d}.jpg", image)
 
-    with open(f"{OUTPUT_PATH}/{tag}/labels/{n_img:05d}.txt", "w") as out:
+    label_out = open(f"{OUTPUT_PATH}/{tag}/labels/{n_img:05d}.txt", "w")
+    gt_out    = open(f"{OUTPUT_PATH}/{tag}/gt/{n_img:05d}.txt", "w")
 
-        for label, xmin, xmax, ymin, ymax in \
-            zip(LABEL, XMIN, XMAX, YMIN, YMAX):
+    for label, xmin, xmax, ymin, ymax in \
+        zip(LABEL, XMIN, XMAX, YMIN, YMAX):
 
-            ncat = label_dict[label]
-            x = (xmin + xmax) / 2
-            y = (ymin + ymax) / 2
-            w = xmax - xmin
-            h = ymax - ymin
+        ncat = label_dict[label]
+        x = (xmin + xmax) / 2
+        y = (ymin + ymax) / 2
+        w = xmax - xmin
+        h = ymax - ymin
 
-            out.write(f"{ncat} {x:.3f} {y:.3f} {w:.3f} {h:.3f}\n")
+        label_out.write(f"{ncat} {x:.3f} {y:.3f} {w:.3f} {h:.3f}\n")
+        gt_out   .write(f"{label} {x:.3f} {y:.3f} {w:.3f} {h:.3f}\n")
+
+    label_out.close()
+    gt_out.close()
 
     for label, xmin, xmax, ymin, ymax in \
         zip(LABEL, XMIN, XMAX, YMIN, YMAX):

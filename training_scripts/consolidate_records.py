@@ -76,7 +76,7 @@ def make_record(original, detection_dict):
         'image/encoded'            : _bytes_feature(original["image/encoded"].numpy()),
         'image/format'             : _bytes_feature(original["image/format"].numpy()),
 
-        'image/sanitized'          : _int64_feature(False),
+        'image/sanitized'          : _int64_feature(True),
 
         'image/height'             : _int64_feature(d["height"]),
         'image/width'              : _int64_feature(d["width"]),
