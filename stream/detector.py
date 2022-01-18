@@ -195,9 +195,9 @@ class Detector():
             self.yolo_size = yolo_size
 
             yolo_path    = os.path.abspath(yolo_path)
-            yolo_config  = os.path.join(yolo_path, yolo_path + "/cfg")
-            yolo_weights = os.path.join(yolo_path, yolo_path + "/wgts")
-            yolo_labels  = os.path.join(yolo_path, yolo_path + "/names")
+            yolo_config  = yolo_path + "/cfg"
+            yolo_weights = yolo_path + "/wgts"
+            yolo_labels  = yolo_path + "/names"
             
             self.yolo_model = cv2.dnn.readNetFromDarknet(yolo_config, yolo_weights)
             self.yolo_model.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)

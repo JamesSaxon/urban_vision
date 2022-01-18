@@ -171,7 +171,7 @@ def track_objects_in_frame(qtracker, qvideo = None, tracker = None, SCALE = 1):
 
             scaled = tracker.draw(scaled, scale = SCALE)
 
-        if qvideo: qvideo.put((nframe, scaled))
+        if qvideo: qvideo.put((nframe, scaled, bool(detections)))
 
         qtracker.task_done()
 
@@ -181,7 +181,8 @@ def track_objects_in_frame(qtracker, qvideo = None, tracker = None, SCALE = 1):
 
 def write_frame_to_stream(video_queue, 
                           VIDEO_OUT, FRAMEXS, FRAMEYS,
-                          XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, pretty_video = False):
+                          XMINS = None, XMAXS = None, YMINS = None, YMAXS = None, 
+                          FILTER_DETS = False, pretty_video = False):
     """
     This function simply writes frames to an output VideoWriter.
     It loops on the video_queue for inputs.
@@ -199,9 +200,10 @@ def write_frame_to_stream(video_queue,
         shade[YMINS:YMAXS,XMINS:XMAXS] = 1
 
 
+    most_recent_det = -float("inf")
     while not (COMPLETE_TRACKING and video_queue.empty()):
 
-        try: nframe, frame = video_queue.get(timeout = 0.1)
+        try: nframe, frame, has_det = video_queue.get(timeout = 0.1)
         except: continue
 
         ##  Cut out the detection region.
@@ -217,7 +219,10 @@ def write_frame_to_stream(video_queue,
                             fontFace = cv2.FONT_HERSHEY_SIMPLEX, fontScale = 2 if FRAMEXS > 600 else 1,
                             color = (255, 255, 255), thickness = 2)
 
-        VIDEO_OUT.write(frame)
+        if has_det: most_recent_det = nframe
+
+        if not FILTER_DETS or nframe - most_recent_det < FILTER_DETS:
+            VIDEO_OUT.write(frame)
 
         video_queue.task_done()
 
@@ -230,7 +235,8 @@ def main(vinput, output, odir, tag,
          roi, xgrid, ygrid, roi_loc, max_overlap, min_area, edge_veto, roi_buffer, roi_point_veto,
          no_tracker, match_method, max_missing, max_distance, min_distance_or,
          predict_matches, kalman_track, max_track, candidate_obs,
-         draw_detector, kalman_viz, contrail, scale, view, no_output, no_csv_output, no_video_output, pretty_video, 
+         draw_detector, kalman_viz, contrail, scale, view, no_output, no_csv_output, no_video_output,
+         filter_dets, pretty_video, 
          show_heat, heat_frac, heat_fade, geometry, verbose, 
          roi_file, select_roi, config):
     """
@@ -307,7 +313,7 @@ def main(vinput, output, odir, tag,
         video_thread = threading.Thread(target = write_frame_to_stream, 
                                         args = (video_queue, video_out, 
                                                 round(FRAMEX / scale), round(FRAMEY / scale), 
-                                                XMINS, XMAXS, YMINS, YMAXS, pretty_video))
+                                                XMINS, XMAXS, YMINS, YMAXS, filter_dets, pretty_video))
         video_thread.start()
 
 
@@ -420,6 +426,7 @@ if __name__ == '__main__':
     parser.add("--no_video_output", default = False, action = "store_true", help = "Do not record the stream.")
     parser.add("--no_csv_output", default = False, action = "store_true", help = "Do not record CSVs.")
     parser.add("--pretty_video", default = False, action = "store_true", help = "Shade out the un-detected space.")
+    parser.add("--filter_dets", default = 0, type = int, help = "Whether or how many frames to print, after a detection.  The default, 0, means no filtering.")
 
     parser.add("--draw_detector", default = False, action = "store_true", help = configargparse.SUPPRESS)
 
